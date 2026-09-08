@@ -1,0 +1,6 @@
+{
+  "name": "Gestión de Equipos y Mantenimiento",
+  "description": "Sistema de gestión de inventario, hoja de vida y control de mantenimiento de equipos médicos y hospitalarios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
