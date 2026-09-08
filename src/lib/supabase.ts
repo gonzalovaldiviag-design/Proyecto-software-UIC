@@ -49,7 +49,21 @@ export interface Mantenimiento {
   accesorios_adicionales: string | null;
   completado_por: string | null;
   recibido_por: string | null;
+  numero_informe?: string | null;
+  fecha_emision_informe?: string | null;
+  diagnostico_final?: string | null;
+  repuestos_utilizados?: string | null;
+  costo?: number | null;
   created_at: string;
+}
+
+export function generarNumeroInforme(codigoMantenimiento: string): string {
+  const match = codigoMantenimiento.match(/(\d+)\s*$/);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    return `INF-MNT-${String(num).padStart(5, '0')}`;
+  }
+  return `INF-MNT-${Date.now().toString().slice(-5)}`;
 }
 
 export interface FallaMantenimiento {
@@ -305,6 +319,11 @@ const INITIAL_MANTENIMIENTOS: Mantenimiento[] = [
     accesorios_adicionales: 'Brazalete adulto nuevo instalado',
     completado_por: 'Téc. Fernando Ruiz',
     recibido_por: 'Enf. Patricia Morales',
+    numero_informe: 'INF-MNT-00003',
+    fecha_emision_informe: '2026-08-21T17:00:00.000Z',
+    diagnostico_final: 'Equipo en óptimas condiciones de operatividad. Pruebas de seguridad eléctrica según norma IEC 62353 aprobadas.',
+    repuestos_utilizados: 'Brazalete adulto NIBP nuevo (Ref: M1574A)',
+    costo: 85000,
     created_at: '2026-08-20T09:00:00.000Z',
   },
 ];

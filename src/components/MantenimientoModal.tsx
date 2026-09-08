@@ -1,7 +1,25 @@
-import { useEffect, useState } from 'react';
-import { X, Upload, FileText, Trash2, Image as ImageIcon, Loader2 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import type { Equipo, Mantenimiento, TipoMantenimiento, EstadoMantenimiento } from '@/lib/supabase';
+import { useEffect, useRef, useState } from 'react';
+import {
+  X,
+  Upload,
+  FileText,
+  Trash2,
+  Image as ImageIcon,
+  Loader2,
+  RotateCcw,
+  CheckCircle2,
+  AlertTriangle,
+  DollarSign,
+  Package,
+} from 'lucide-react';
+import {
+  supabase,
+  generarNumeroInforme,
+  type Equipo,
+  type Mantenimiento,
+  type TipoMantenimiento,
+  type EstadoMantenimiento,
+} from '@/lib/supabase';
 
 export interface MantenimientoFormData {
   equipo_id: string | null;
@@ -20,6 +38,12 @@ export interface MantenimientoFormData {
   accesorios_adicionales: string | null;
   completado_por: string | null;
   recibido_por: string | null;
+  // Campos Informe Técnico
+  numero_informe?: string | null;
+  fecha_emision_informe?: string | null;
+  diagnostico_final?: string | null;
+  repuestos_utilizados?: string | null;
+  costo?: number | null;
 }
 
 interface MantenimientoModalProps {
@@ -29,6 +53,7 @@ interface MantenimientoModalProps {
   equipos: Equipo[];
   equipoPreseleccionado?: Equipo | null;
   mantenimientoEdicion?: Mantenimiento | null;
+  onReabrir?: (mantenimiento: Mantenimiento) => void;
 }
 
 const inputClass =
@@ -54,6 +79,9 @@ export default function MantenimientoModal({
   const [estado, setEstado] = useState<EstadoMantenimiento>('Pendiente de Asignación');
   const [estadoError, setEstadoError] = useState('');
   const [descripcionTrabajo, setDescripcionTrabajo] = useState('');
+  const [diagnosticoFinal, setDiagnosticoFinal] = useState('');
+  const [repuestosUtilizados, setRepuestosUtilizados] = useState('');
+  const [costo, setCosto] = useState('');
   const [fechaCierre, setFechaCierre] = useState('');
   const [horasHombre, setHorasHombre] = useState('');
   const [fotosUrls, setFotosUrls] = useState<string[]>([]);
@@ -61,13 +89,20 @@ export default function MantenimientoModal({
   const [accesoriosAdicionales, setAccesoriosAdicionales] = useState('');
   const [completadoPor, setCompletadoPor] = useState('');
   const [recibidoPor, setRecibidoPor] = useState('');
+  const [numeroInforme, setNumeroInforme] = useState<string | null>(null);
+  const [fechaEmisionInforme, setFechaEmisionInforme] = useState<string | null>(null);
+  const [reabiertoAviso, setReabiertoAviso] = useState<string | null>(null);
+
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [touched, setTouched] = useState(false);
+  const asignadoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setTouched(false);
+      setEstadoError('');
+      setReabiertoAviso(null);
       if (mantenimientoEdicion) {
         const eq = equipos.find((e) => e.id === mantenimientoEdicion.equipo_id);
         setModoEquipo(eq ? 'registrado' : 'manual');
@@ -80,6 +115,9 @@ export default function MantenimientoModal({
         setTipo(mantenimientoEdicion.tipo_mantenimiento);
         setEstado(mantenimientoEdicion.estado_mantenimiento);
         setDescripcionTrabajo(mantenimientoEdicion.descripcion_trabajo_realizado ?? '');
+        setDiagnosticoFinal(mantenimientoEdicion.diagnostico_final ?? '');
+        setRepuestosUtilizados(mantenimientoEdicion.repuestos_utilizados ?? '');
+        setCosto(mantenimientoEdicion.costo != null ? String(mantenimientoEdicion.costo) : '');
         setFechaCierre(mantenimientoEdicion.fecha_cierre ?? '');
         setHorasHombre(
           mantenimientoEdicion.horas_hombre != null
@@ -91,6 +129,8 @@ export default function MantenimientoModal({
         setAccesoriosAdicionales(mantenimientoEdicion.accesorios_adicionales ?? '');
         setCompletadoPor(mantenimientoEdicion.completado_por ?? '');
         setRecibidoPor(mantenimientoEdicion.recibido_por ?? '');
+        setNumeroInforme(mantenimientoEdicion.numero_informe ?? null);
+        setFechaEmisionInforme(mantenimientoEdicion.fecha_emision_informe ?? null);
       } else {
         setModoEquipo('registrado');
         setEquipoId(
@@ -108,6 +148,9 @@ export default function MantenimientoModal({
         setTipo('Correctivo');
         setEstado('Pendiente de Asignación');
         setDescripcionTrabajo('');
+        setDiagnosticoFinal('');
+        setRepuestosUtilizados('');
+        setCosto('');
         setFechaCierre('');
         setHorasHombre('');
         setFotosUrls([]);
@@ -115,6 +158,8 @@ export default function MantenimientoModal({
         setAccesoriosAdicionales('');
         setCompletadoPor('');
         setRecibidoPor('');
+        setNumeroInforme(null);
+        setFechaEmisionInforme(null);
       }
     }
   }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion]);
@@ -138,34 +183,53 @@ export default function MantenimientoModal({
       : equipoManual.trim();
 
   const completadoRequerido = estado === 'Completado';
-
-  const canTransitionTo = (target: EstadoMantenimiento): boolean => {
-    if (target === 'En proceso') {
-      return (
-        (estado === 'Pendiente de Asignación' || estado === 'Completado') &&
-        asignadoA.trim() !== ''
-      );
-    }
-    if (target === 'Completado') {
-      return (
-        estado === 'En proceso' &&
-        completadoPor.trim() !== '' &&
-        recibidoPor.trim() !== ''
-      );
-    }
-    return false;
-  };
-
   const asignadoRequerido = estado !== 'Pendiente de Asignación';
+
+  // Validación rigurosa de campos requeridos para cierre con Informe Técnico
+  const camposPendientesCierre: string[] = [];
+  if (modoEquipo === 'registrado' ? !equipoId : !equipoManual.trim()) {
+    camposPendientesCierre.push('Identificación del equipo');
+  }
+  if (!fecha.trim()) camposPendientesCierre.push('Fecha de requerimiento');
+  if (!fechaCierre.trim()) camposPendientesCierre.push('Fecha de realización');
+  if (!completadoPor.trim()) camposPendientesCierre.push('Técnico responsable');
+  if (!recibidoPor.trim()) camposPendientesCierre.push('Recibido por (conformidad)');
+  if (!descripcionTrabajo.trim()) camposPendientesCierre.push('Descripción del trabajo realizado');
+  if (!diagnosticoFinal.trim()) camposPendientesCierre.push('Resultado / Diagnóstico técnico');
+
+  const cierreValido = camposPendientesCierre.length === 0;
 
   const valid =
     identificacion.trim() !== '' &&
     problema.trim() !== '' &&
     solicitadoPor.trim() !== '' &&
     (!asignadoRequerido || asignadoA.trim() !== '') &&
-    (!completadoRequerido || (completadoPor.trim() !== '' && recibidoPor.trim() !== '')) &&
+    (estado !== 'En proceso' || asignadoA.trim() !== '') &&
+    (!completadoRequerido || cierreValido) &&
     fecha.trim() !== '' &&
     estadoError === '';
+
+  const correlativoProyectado =
+    numeroInforme ||
+    mantenimientoEdicion?.numero_informe ||
+    generarNumeroInforme(mantenimientoEdicion?.codigo ?? 'MANT-001');
+
+  function handleReabrirMantenimiento() {
+    if (
+      !confirm(
+        '¿Deseas reabrir esta orden de trabajo para corregir datos? El informe técnico actual será anulado y el mantenimiento volverá a estado "En proceso" para su edición.'
+      )
+    ) {
+      return;
+    }
+    setEstado('En proceso');
+    setNumeroInforme(null);
+    setFechaEmisionInforme(null);
+    setReabiertoAviso(
+      'La orden de trabajo fue reabierta a "En proceso". El informe previo ha sido anulado. Puedes modificar cualquier parámetro y volver a completarla.'
+    );
+    setEstadoError('');
+  }
 
   async function handlePhotoUpload(files: FileList) {
     if (!mantenimientoEdicion) return;
@@ -246,15 +310,33 @@ export default function MantenimientoModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
-    if (asignadoRequerido && asignadoA.trim() === '') {
-      setEstadoError('Debes completar "Asignado a" para usar este estado');
+
+    if (estado === 'En proceso' && asignadoA.trim() === '') {
+      setEstadoError(
+        'Para guardar en estado "En proceso" es obligatorio rellenar el campo "Asignado a (Técnico / Responsable)".'
+      );
+      asignadoInputRef.current?.focus();
       return;
     }
-    if (completadoRequerido && (completadoPor.trim() === '' || recibidoPor.trim() === '')) {
-      setEstadoError('Debes completar "Completado por" y "Recibido por" para marcar como Completado');
+
+    if (asignadoRequerido && asignadoA.trim() === '') {
+      setEstadoError('Debes completar "Asignado a" para usar este estado');
+      asignadoInputRef.current?.focus();
+      return;
+    }
+    if (completadoRequerido && !cierreValido) {
+      setEstadoError(
+        `Para cerrar con Informe Técnico debes completar: ${camposPendientesCierre.join(', ')}`
+      );
       return;
     }
     if (!valid) return;
+
+    const finalEstado: EstadoMantenimiento =
+      estado === 'Pendiente de Asignación' && asignadoA.trim() !== ''
+        ? 'En proceso'
+        : estado;
+
     onSave({
       equipo_id: modoEquipo === 'registrado' ? equipoId || null : null,
       equipo_identificacion: identificacion.trim(),
@@ -263,7 +345,7 @@ export default function MantenimientoModal({
       asignado_a: asignadoA.trim() || null,
       fecha_requerimiento: fecha,
       tipo_mantenimiento: tipo,
-      estado_mantenimiento: estado,
+      estado_mantenimiento: finalEstado,
       descripcion_trabajo_realizado: descripcionTrabajo.trim() || null,
       fecha_cierre: fechaCierre || null,
       horas_hombre: horasHombre.trim() === '' ? null : Number(horasHombre),
@@ -272,24 +354,32 @@ export default function MantenimientoModal({
       accesorios_adicionales: accesoriosAdicionales.trim() || null,
       completado_por: completadoPor.trim() || null,
       recibido_por: recibidoPor.trim() || null,
+      diagnostico_final: diagnosticoFinal.trim() || null,
+      repuestos_utilizados: repuestosUtilizados.trim() || null,
+      costo: costo.trim() === '' ? null : Number(costo),
+      numero_informe: finalEstado === 'Completado' ? correlativoProyectado : null,
+      fecha_emision_informe:
+        finalEstado === 'Completado'
+          ? fechaEmisionInforme || new Date().toISOString()
+          : null,
     });
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
+        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200/60">
+      <div className="relative w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200/80">
         <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">
-              {esEdicion ? 'Editar Mantenimiento' : 'Ingreso de Mantenimiento'}
+              {esEdicion ? `Mantenimiento ${mantenimientoEdicion.codigo}` : 'Ingreso de Mantenimiento'}
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
               {esEdicion
-                ? 'Modifica la información del requerimiento'
+                ? 'Modifica la información y gestiona el cierre técnico'
                 : 'Registra un nuevo requerimiento de mantenimiento'}
             </p>
           </div>
@@ -302,8 +392,40 @@ export default function MantenimientoModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="max-h-[70vh] overflow-y-auto px-6 py-5">
-          {/* Identificacion del equipo */}
+        <form onSubmit={handleSubmit} className="max-h-[75vh] overflow-y-auto px-6 py-5">
+          {/* Banner si está completado con Informe Técnico */}
+          {esEdicion && mantenimientoEdicion?.estado_mantenimiento === 'Completado' && estado === 'Completado' && (
+            <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-900">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                <div>
+                  <span className="font-semibold">Mantenimiento Completado con Informe Técnico:</span>{' '}
+                  <span className="font-mono font-bold text-emerald-800">
+                    {mantenimientoEdicion.numero_informe || correlativoProyectado}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleReabrirMantenimiento}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 font-semibold text-amber-800 shadow-sm transition hover:bg-amber-50 active:scale-95"
+                title="Reabrir esta orden de trabajo para corregir datos"
+              >
+                <RotateCcw className="h-3.5 w-3.5 text-amber-700" />
+                <span>Reabrir / Anular Informe</span>
+              </button>
+            </div>
+          )}
+
+          {/* Notificación si acaba de ser reabierto */}
+          {reabiertoAviso && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">{reabiertoAviso}</div>
+            </div>
+          )}
+
+          {/* Identificación del equipo */}
           <div className="mb-4">
             <label className="mb-1.5 block text-sm font-medium text-slate-700">
               Identificación del equipo <span className="text-rose-500">*</span>
@@ -318,7 +440,7 @@ export default function MantenimientoModal({
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                Equipo registrado
+                Seleccionar del inventario
               </button>
               <button
                 type="button"
@@ -333,241 +455,428 @@ export default function MantenimientoModal({
               </button>
             </div>
             {modoEquipo === 'registrado' ? (
-              equipos.length === 0 ? (
-                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                  No hay equipos registrados. Selecciona "Ingresar manualmente".
-                </p>
-              ) : (
-                <select
-                  className={inputClass}
-                  value={equipoId}
-                  onChange={(e) => setEquipoId(e.target.value)}
-                >
-                  {equipos.map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.codigo} — {e.nombre}
-                    </option>
-                  ))}
-                </select>
-              )
+              <select
+                className={inputClass}
+                value={equipoId}
+                onChange={(e) => setEquipoId(e.target.value)}
+              >
+                <option value="">Seleccione un equipo...</option>
+                {equipos.map((eq) => (
+                  <option key={eq.id} value={eq.id}>
+                    {eq.codigo} — {eq.nombre} ({eq.serie})
+                  </option>
+                ))}
+              </select>
             ) : (
               <input
                 className={inputClass}
                 value={equipoManual}
                 onChange={(e) => setEquipoManual(e.target.value)}
-                placeholder="Ej: EQ-999 — Monitor portátil"
+                placeholder="Ej: Desfibrilador Zoll R Series (SN-12345)"
               />
             )}
-            {touched && identificacion.trim() === '' && (
-              <p className="mt-1 text-xs text-rose-500">
-                La identificación del equipo es obligatoria
-              </p>
+            {touched && !identificacion.trim() && (
+              <p className="mt-1 text-xs text-rose-500">Debes indicar el equipo</p>
             )}
           </div>
 
-          {/* Tipo de mantenimiento */}
+          {/* Problema */}
           <div className="mb-4">
             <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Tipo de mantenimiento <span className="text-rose-500">*</span>
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => !esEdicion && setTipo('Correctivo')}
-                disabled={esEdicion}
-                className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-all ${
-                  tipo === 'Correctivo'
-                    ? 'border-amber-500 bg-amber-50 text-amber-700 shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                } ${esEdicion ? 'cursor-not-allowed opacity-80' : ''}`}
-              >
-                Mantenimiento Correctivo
-              </button>
-              <button
-                type="button"
-                onClick={() => !esEdicion && setTipo('Preventivo')}
-                disabled={esEdicion}
-                className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-all ${
-                  tipo === 'Preventivo'
-                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                } ${esEdicion ? 'cursor-not-allowed opacity-80' : ''}`}
-              >
-                Mantenimiento Preventivo
-              </button>
-            </div>
-          </div>
-
-          {/* Problema reportado */}
-          <div className="mb-4">
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Problema reportado <span className="text-rose-500">*</span>
+              Problema reportado o causa <span className="text-rose-500">*</span>
             </label>
             <textarea
-              className={`${inputClass} min-h-[80px] resize-y`}
+              className={`${inputClass} min-h-[75px] resize-y`}
               value={problema}
               onChange={(e) => setProblema(e.target.value)}
-              placeholder="Describe el problema reportado..."
+              placeholder="Describe detalladamente la falla o motivo del requerimiento..."
             />
             {touched && !problema.trim() && (
-              <p className="mt-1 text-xs text-rose-500">El problema reportado es obligatorio</p>
+              <p className="mt-1 text-xs text-rose-500">El problema es obligatorio</p>
             )}
           </div>
 
-          {/* Accesorios o adicionales */}
-          <div className="mb-4">
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Accesorios o adicionales
-            </label>
-            <textarea
-              className={`${inputClass} min-h-[80px] resize-y`}
-              value={accesoriosAdicionales}
-              onChange={(e) => setAccesoriosAdicionales(e.target.value)}
-              placeholder="Describe los accesorios o componentes adicionales..."
-            />
-          </div>
-
-          {/* Solicitado por */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Solicitado por <span className="text-rose-500">*</span>
-            </label>
-            <input
-              className={inputClass}
-              value={solicitadoPor}
-              onChange={(e) => setSolicitadoPor(e.target.value)}
-              placeholder="Nombre de quien solicita"
-            />
-            {touched && !solicitadoPor.trim() && (
-              <p className="mt-1 text-xs text-rose-500">Este campo es obligatorio</p>
-            )}
-          </div>
-
-          {/* Asignado a (solo edición) */}
-          {esEdicion && (
-            <div className="mt-4">
+          {/* Solicitado por / Asignado a */}
+          <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                Asignado a {asignadoRequerido && <span className="text-rose-500">*</span>}
+                Solicitado por <span className="text-rose-500">*</span>
               </label>
               <input
                 className={inputClass}
+                value={solicitadoPor}
+                onChange={(e) => setSolicitadoPor(e.target.value)}
+                placeholder="Nombre del solicitante o servicio"
+              />
+              {touched && !solicitadoPor.trim() && (
+                <p className="mt-1 text-xs text-rose-500">El solicitante es obligatorio</p>
+              )}
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Asignado a (Técnico / Responsable){' '}
+                {asignadoRequerido && <span className="text-rose-500">*</span>}
+              </label>
+              <input
+                ref={asignadoInputRef}
+                className={`${inputClass} ${
+                  ((touched && asignadoRequerido && !asignadoA.trim()) || (estadoError && !asignadoA.trim()))
+                    ? '!border-rose-400 focus:!border-rose-500 focus:!ring-rose-200'
+                    : ''
+                }`}
                 value={asignadoA}
                 onChange={(e) => {
-                  setAsignadoA(e.target.value);
+                  const val = e.target.value;
+                  setAsignadoA(val);
                   setEstadoError('');
+                  if (val.trim() !== '') {
+                    if (estado === 'Pendiente de Asignación') {
+                      setEstado('En proceso');
+                    }
+                  } else {
+                    if (estado === 'En proceso') {
+                      setEstado('Pendiente de Asignación');
+                    }
+                  }
                 }}
-                placeholder="Nombre del responsable"
+                placeholder="Técnico o empresa responsable"
               />
-              {touched && asignadoRequerido && !asignadoA.trim() && (
-                <p className="mt-1 text-xs text-rose-500">Este campo es obligatorio</p>
+              {asignadoA.trim() !== '' && estado === 'En proceso' ? (
+                <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600">
+                  <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-blue-600" />
+                  <span>Estado cambiado automáticamente a "En proceso"</span>
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  Requerido para pasar al estado "En proceso". Se actualiza automáticamente al escribir.
+                </p>
               )}
-              {estado === 'Pendiente de Asignación' && asignadoA.trim() === '' && (
-                <p className="mt-1 text-xs text-slate-400">
-                  Completa este campo para poder cambiar el estado a "En proceso"
+              {touched && asignadoRequerido && !asignadoA.trim() && (
+                <p className="mt-1 text-xs font-medium text-rose-500">
+                  Debe asignarse para avanzar al estado "{estado}"
                 </p>
               )}
             </div>
-          )}
+          </div>
 
-          {/* Fecha */}
+          {/* Tipo y Fecha Requerimiento */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Tipo de mantenimiento
+              </label>
+              <div className="flex gap-2">
+                {(['Correctivo', 'Preventivo'] as TipoMantenimiento[]).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTipo(t)}
+                    className={`flex-1 rounded-lg border py-2 text-xs font-semibold transition-all ${
+                      tipo === t
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Fecha de requerimiento <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="date"
+                className={inputClass}
+                value={fecha}
+                onChange={(e) => setFecha(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Estado de la Orden de Trabajo */}
           <div className="mt-4">
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Fecha de requerimiento <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="date"
-              className={inputClass}
-              value={fecha}
-              onChange={(e) => setFecha(e.target.value)}
-            />
-            {touched && !fecha.trim() && (
-              <p className="mt-1 text-xs text-rose-500">La fecha es obligatoria</p>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm font-medium text-slate-700">
+                Estado de la Orden de Trabajo
+              </label>
+              {estado === 'Completado' && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Requiere Informe Técnico
+                </span>
+              )}
+              {estado === 'En proceso' && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                  En proceso
+                </span>
+              )}
+              {estado === 'Pendiente de Asignación' && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                  Pendiente de Asignación
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {(['Pendiente de Asignación', 'En proceso', 'Completado'] as EstadoMantenimiento[]).map(
+                (est) => (
+                  <button
+                    key={est}
+                    type="button"
+                    onClick={() => {
+                      if (est === 'En proceso' && !asignadoA.trim()) {
+                        setEstadoError(
+                          'Para cambiar manualmente al estado "En proceso" es obligatorio rellenar el campo "Asignado a (Técnico / Responsable)".'
+                        );
+                        setTouched(true);
+                        asignadoInputRef.current?.focus();
+                        return;
+                      }
+                      if (est === 'Completado' && !asignadoA.trim()) {
+                        setEstadoError(
+                          'Para cambiar al estado "Completado" es obligatorio rellenar el campo "Asignado a (Técnico / Responsable)".'
+                        );
+                        setTouched(true);
+                        asignadoInputRef.current?.focus();
+                        return;
+                      }
+                      setEstado(est);
+                      setEstadoError('');
+                      if (est === 'Completado') {
+                        if (!fechaCierre) {
+                          setFechaCierre(new Date().toISOString().slice(0, 10));
+                        }
+                        if (!completadoPor && asignadoA) {
+                          setCompletadoPor(asignadoA);
+                        }
+                      }
+                    }}
+                    className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-all ${
+                      estado === est
+                        ? est === 'Completado'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-semibold shadow-sm'
+                          : est === 'En proceso'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold shadow-sm'
+                            : 'border-amber-500 bg-amber-50 text-amber-700 font-semibold shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    {est}
+                  </button>
+                )
+              )}
+            </div>
+            {estadoError && (
+              <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 text-rose-600 mt-0.5" />
+                <span>{estadoError}</span>
+              </div>
             )}
           </div>
 
-          {/* Estado (solo edición) */}
+          {/* Sección de Cierre e Informe Técnico (cuando está en Completado o En proceso) */}
           {esEdicion && (
-            <div className="mt-4">
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                Estado de mantenimiento
-              </label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {(['Pendiente de Asignación', 'En proceso', 'Completado'] as EstadoMantenimiento[]).map((est) => {
-                  const disabled = estado !== est && !canTransitionTo(est);
-                  return (
-                    <button
-                      key={est}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => {
-                        setEstado(est);
-                        setEstadoError('');
-                        if (est === 'Completado' && !fechaCierre) {
-                          setFechaCierre(new Date().toISOString().slice(0, 10));
-                        }
-                      }}
-                      className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-all ${
-                        estado === est
-                          ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
-                          : disabled
-                            ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                      }`}
-                    >
-                      {est}
-                    </button>
-                  );
-                })}
+            <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <FileText className="h-4 w-4 text-blue-600" />
+                  Detalles de Cierre e Informe Técnico
+                </h3>
+                {estado === 'Completado' && (
+                  <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                    {correlativoProyectado}
+                  </span>
+                )}
               </div>
-              {estadoError && (
-                <p className="mt-1.5 text-xs text-rose-500">{estadoError}</p>
-              )}
-              {estado === 'En proceso' && (completadoPor.trim() === '' || recibidoPor.trim() === '') && (
-                <p className="mt-1.5 text-xs text-slate-400">
-                  Completa "Completado por" y "Recibido por" para poder cambiar el estado a "Completado"
-                </p>
-              )}
-            </div>
-          )}
 
-          {/* Campos de cierre (solo edición) */}
-          {esEdicion && (
-            <>
-              <div className="mt-4">
+              {/* Descripción del Trabajo Realizado */}
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Descripción del trabajo realizado
+                  Descripción del trabajo realizado{' '}
+                  {completadoRequerido && <span className="text-rose-500">*</span>}
                 </label>
                 <textarea
-                  className={`${inputClass} min-h-[80px] resize-y`}
+                  className={`${inputClass} min-h-[75px] resize-y`}
                   value={descripcionTrabajo}
-                  onChange={(e) => setDescripcionTrabajo(e.target.value)}
-                  placeholder="Describe el trabajo realizado..."
+                  onChange={(e) => {
+                    setDescripcionTrabajo(e.target.value);
+                    setEstadoError('');
+                  }}
+                  placeholder="Detalla las acciones de mantenimiento, pruebas y mediciones realizadas..."
+                />
+                {touched && completadoRequerido && !descripcionTrabajo.trim() && (
+                  <p className="mt-1 text-xs text-rose-500">
+                    Obligatorio para emitir el informe técnico
+                  </p>
+                )}
+              </div>
+
+              {/* Diagnóstico Final y Resultado Técnico */}
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Resultado / Diagnóstico técnico final{' '}
+                  {completadoRequerido && <span className="text-rose-500">*</span>}
+                </label>
+                <textarea
+                  className={`${inputClass} min-h-[65px] resize-y`}
+                  value={diagnosticoFinal}
+                  onChange={(e) => {
+                    setDiagnosticoFinal(e.target.value);
+                    setEstadoError('');
+                  }}
+                  placeholder="Ej: Equipo verificado y calibrado según pauta. Aprobado y apto para uso clínico."
+                />
+                {touched && completadoRequerido && !diagnosticoFinal.trim() && (
+                  <p className="mt-1 text-xs text-rose-500">
+                    Obligatorio para emitir el informe técnico
+                  </p>
+                )}
+              </div>
+
+              {/* Repuestos e Insumos / Costo */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700 flex items-center gap-1">
+                    <Package className="h-3.5 w-3.5 text-slate-400" />
+                    Repuestos / Materiales utilizados (si aplica)
+                  </label>
+                  <input
+                    className={inputClass}
+                    value={repuestosUtilizados}
+                    onChange={(e) => setRepuestosUtilizados(e.target.value)}
+                    placeholder="Ej: Batería 12V, kit filtros, sellos"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700 flex items-center gap-1">
+                    <DollarSign className="h-3.5 w-3.5 text-slate-400" />
+                    Costo total del servicio / repuestos ($)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    className={inputClass}
+                    value={costo}
+                    onChange={(e) => setCosto(e.target.value)}
+                    placeholder="Ej: 120000"
+                  />
+                </div>
+              </div>
+
+              {/* Responsables de Cierre */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Técnico responsable (Completado por){' '}
+                    {completadoRequerido && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    className={inputClass}
+                    value={completadoPor}
+                    onChange={(e) => {
+                      setCompletadoPor(e.target.value);
+                      setEstadoError('');
+                    }}
+                    placeholder="Nombre y apellido del técnico"
+                  />
+                  {touched && completadoRequerido && !completadoPor.trim() && (
+                    <p className="mt-1 text-xs text-rose-500">Obligatorio para la firma del informe</p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Recibido por (Conformidad){' '}
+                    {completadoRequerido && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    className={inputClass}
+                    value={recibidoPor}
+                    onChange={(e) => {
+                      setRecibidoPor(e.target.value);
+                      setEstadoError('');
+                    }}
+                    placeholder="Nombre de quien recibe conforme"
+                  />
+                  {touched && completadoRequerido && !recibidoPor.trim() && (
+                    <p className="mt-1 text-xs text-rose-500">Obligatorio para la firma de recepción</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Fecha de realización / Horas hombre */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Fecha de realización{' '}
+                    {completadoRequerido && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="date"
+                    className={inputClass}
+                    value={fechaCierre}
+                    onChange={(e) => {
+                      setFechaCierre(e.target.value);
+                      setEstadoError('');
+                    }}
+                  />
+                  {touched && completadoRequerido && !fechaCierre.trim() && (
+                    <p className="mt-1 text-xs text-rose-500">Obligatorio para el informe</p>
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Horas hombre empleadas
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    className={inputClass}
+                    value={horasHombre}
+                    onChange={(e) => setHorasHombre(e.target.value)}
+                    placeholder="Ej: 3.5"
+                  />
+                </div>
+              </div>
+
+              {/* Accesorios adicionales */}
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Accesorios adicionales entregados
+                </label>
+                <input
+                  className={inputClass}
+                  value={accesoriosAdicionales}
+                  onChange={(e) => setAccesoriosAdicionales(e.target.value)}
+                  placeholder="Ej: Cable de poder, electrodos, manual de usuario"
                 />
               </div>
 
               {/* Fotografías */}
-              <div className="mt-4">
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Fotografías
-                  <span className="ml-1 text-xs font-normal text-slate-400">
+                  Fotografías de evidencia{' '}
+                  <span className="text-xs font-normal text-slate-400">
                     ({fotosUrls.length}/10)
                   </span>
                 </label>
-                {estado !== 'Completado' && fotosUrls.length < 10 && (
+                {fotosUrls.length < 10 && (
                   <label
-                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50/30 ${
+                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 px-4 py-4 text-xs text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50/30 ${
                       uploadingPhoto ? 'pointer-events-none opacity-60' : ''
                     }`}
                   >
                     {uploadingPhoto ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Subiendo...</span>
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                        <span>Subiendo fotografías...</span>
                       </>
                     ) : (
                       <>
-                        <ImageIcon className="h-4 w-4" />
-                        <span>Click para subir fotografías</span>
+                        <ImageIcon className="h-4 w-4 text-slate-400" />
+                        <span>Click para adjuntar fotos</span>
                       </>
                     )}
                     <input
@@ -580,49 +889,54 @@ export default function MantenimientoModal({
                   </label>
                 )}
                 {fotosUrls.length > 0 && (
-                  <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="mt-2.5 grid grid-cols-3 gap-2">
                     {fotosUrls.map((url) => (
-                      <div key={url} className="group relative overflow-hidden rounded-lg border border-slate-200">
-                        <img src={url} alt="Foto mantenimiento" className="h-20 w-full object-cover" />
-                        {estado !== 'Completado' && (
-                          <button
-                            type="button"
-                            onClick={() => removeFoto(url)}
-                            className="absolute right-1 top-1 rounded-md bg-rose-500/80 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                            aria-label="Eliminar foto"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        )}
+                      <div
+                        key={url}
+                        className="group relative overflow-hidden rounded-lg border border-slate-200"
+                      >
+                        <img
+                          src={url}
+                          alt="Foto"
+                          className="h-16 w-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeFoto(url)}
+                          className="absolute right-1 top-1 rounded-md bg-rose-600/90 p-1 text-white opacity-0 transition group-hover:opacity-100"
+                          aria-label="Eliminar foto"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
 
-              {/* Documentos / informes externos */}
-              <div className="mt-4">
+              {/* Documentos adjuntos */}
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                  Documentos o informes externos
-                  <span className="ml-1 text-xs font-normal text-slate-400">
+                  Documentos externos adjuntos{' '}
+                  <span className="text-xs font-normal text-slate-400">
                     ({documentosUrls.length}/10)
                   </span>
                 </label>
-                {estado !== 'Completado' && documentosUrls.length < 10 && (
+                {documentosUrls.length < 10 && (
                   <label
-                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50/30 ${
+                    className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 px-4 py-4 text-xs text-slate-500 transition-colors hover:border-blue-400 hover:bg-blue-50/30 ${
                       uploadingDoc ? 'pointer-events-none opacity-60' : ''
                     }`}
                   >
                     {uploadingDoc ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Subiendo...</span>
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                        <span>Subiendo documentos...</span>
                       </>
                     ) : (
                       <>
-                        <Upload className="h-4 w-4" />
-                        <span>Click para subir documentos</span>
+                        <Upload className="h-4 w-4 text-slate-400" />
+                        <span>Click para adjuntar archivos (PDF, DOC, XLS)</span>
                       </>
                     )}
                     <input
@@ -635,28 +949,26 @@ export default function MantenimientoModal({
                   </label>
                 )}
                 {documentosUrls.length > 0 && (
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-2.5 space-y-2">
                     {documentosUrls.map((url) => {
                       const name = url.split('/').pop() ?? 'documento';
                       return (
                         <div
                           key={url}
-                          className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"
+                          className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
                         >
-                          <div className="flex items-center gap-2 text-sm text-slate-600">
-                            <FileText className="h-4 w-4 text-blue-500" />
-                            <span className="truncate max-w-[200px]">{name}</span>
+                          <div className="flex items-center gap-2 text-slate-700 truncate">
+                            <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                            <span className="truncate">{name}</span>
                           </div>
-                          {estado !== 'Completado' && (
-                            <button
-                              type="button"
-                              onClick={() => removeDocumento(url)}
-                              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                              aria-label="Eliminar documento"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => removeDocumento(url)}
+                            className="rounded p-1 text-slate-400 hover:text-rose-600"
+                            aria-label="Eliminar documento"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       );
                     })}
@@ -664,76 +976,45 @@ export default function MantenimientoModal({
                 )}
               </div>
 
-              {/* Completado por / Recibido por */}
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Completado por {completadoRequerido && <span className="text-rose-500">*</span>}
-                  </label>
-                  <input
-                    className={inputClass}
-                    value={completadoPor}
-                    onChange={(e) => {
-                      setCompletadoPor(e.target.value);
-                      setEstadoError('');
-                    }}
-                    placeholder="Nombre de quien completa el trabajo"
-                  />
-                  {touched && completadoRequerido && !completadoPor.trim() && (
-                    <p className="mt-1 text-xs text-rose-500">Este campo es obligatorio</p>
+              {/* Callout de Validación para Cerrar con Informe */}
+              {estado === 'Completado' && (
+                <div
+                  className={`rounded-xl border p-3.5 text-xs transition-all ${
+                    cierreValido
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                      : 'border-amber-300 bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-semibold">
+                    {cierreValido ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    ) : (
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    )}
+                    <span>
+                      {cierreValido
+                        ? 'Listo para emitir Informe Técnico'
+                        : 'Campos obligatorios pendientes para emitir Informe Técnico:'}
+                    </span>
+                  </div>
+                  {cierreValido ? (
+                    <p className="mt-1 text-emerald-700">
+                      Al guardar se generará y certificará el informe{' '}
+                      <strong className="font-mono">{correlativoProyectado}</strong> con fecha/hora oficial de emisión y firmas.
+                    </p>
+                  ) : (
+                    <ul className="mt-1.5 list-disc list-inside space-y-0.5 text-amber-800">
+                      {camposPendientesCierre.map((c) => (
+                        <li key={c}>{c}</li>
+                      ))}
+                    </ul>
                   )}
                 </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Recibido por {completadoRequerido && <span className="text-rose-500">*</span>}
-                  </label>
-                  <input
-                    className={inputClass}
-                    value={recibidoPor}
-                    onChange={(e) => {
-                      setRecibidoPor(e.target.value);
-                      setEstadoError('');
-                    }}
-                    placeholder="Nombre de quien recibe el trabajo"
-                  />
-                  {touched && completadoRequerido && !recibidoPor.trim() && (
-                    <p className="mt-1 text-xs text-rose-500">Este campo es obligatorio</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Fecha de cierre / Horas hombre */}
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Fecha de cierre de trabajo
-                  </label>
-                  <input
-                    type="date"
-                    className={inputClass}
-                    value={fechaCierre}
-                    onChange={(e) => setFechaCierre(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                    Horas hombre utilizadas
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.25"
-                    className={inputClass}
-                    value={horasHombre}
-                    onChange={(e) => setHorasHombre(e.target.value)}
-                    placeholder="Ej: 4.5"
-                  />
-                </div>
-              </div>
-            </>
+              )}
+            </div>
           )}
 
-          <div className="mt-6 flex items-center justify-end gap-3">
+          <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-4">
             <button
               type="button"
               onClick={onClose}
@@ -743,9 +1024,29 @@ export default function MantenimientoModal({
             </button>
             <button
               type="submit"
-              className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 hover:shadow active:scale-[0.98]"
+              disabled={estado === 'Completado' && !cierreValido}
+              className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold shadow-sm transition-all active:scale-[0.98] ${
+                estado === 'Completado'
+                  ? cierreValido
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
             >
-              {esEdicion ? 'Guardar cambios' : 'Registrar mantenimiento'}
+              {estado === 'Completado' ? (
+                <>
+                  <FileText className="h-4 w-4" />
+                  <span>
+                    {mantenimientoEdicion?.estado_mantenimiento === 'Completado'
+                      ? 'Actualizar Informe Técnico'
+                      : 'Generar y Cerrar con Informe Técnico'}
+                  </span>
+                </>
+              ) : esEdicion ? (
+                'Guardar cambios'
+              ) : (
+                'Registrar mantenimiento'
+              )}
             </button>
           </div>
         </form>

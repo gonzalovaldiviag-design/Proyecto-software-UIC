@@ -1,3 +1,92 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+
+  html,
+  body,
+  #root {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    height: auto !important;
+    min-height: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide navigation, buttons, and anything marked as print:hidden */
+  header,
+  nav,
+  aside,
+  button,
+  .print-hide,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* When printing the report modal, unconstrain layout to allow natural multi-page flow */
+  .print-modal-overlay {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+  }
+
+  .print-modal-container {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .print-modal-scroll,
+  #printable-report {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Prevent page breaks inside cards, tables, signatures */
+  .break-inside-avoid,
+  .print-avoid-break,
+  table,
+  tr,
+  .rounded-xl {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}

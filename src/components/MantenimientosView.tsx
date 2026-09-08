@@ -13,9 +13,13 @@ import {
   ClipboardList,
   Flag,
   Pencil,
+  Download,
+  FileText,
+  RotateCcw,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
+import InformeTecnicoModal from '@/components/InformeTecnicoModal';
 
 const estadosM: EstadoMantenimiento[] = [
   'Pendiente de Asignación',
@@ -94,6 +98,8 @@ export default function MantenimientosView({
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editandoMant, setEditandoMant] = useState<Mantenimiento | null>(null);
+  const [informeModalOpen, setInformeModalOpen] = useState(false);
+  const [informeMantenimiento, setInformeMantenimiento] = useState<Mantenimiento | null>(null);
 
   async function fetchMantenimientos() {
     setLoading(true);
@@ -120,6 +126,7 @@ export default function MantenimientosView({
       const matchSearch =
         q === '' ||
         (m.codigo ?? '').toLowerCase().includes(q) ||
+        (m.numero_informe ?? '').toLowerCase().includes(q) ||
         (m.equipo_identificacion ?? '').toLowerCase().includes(q) ||
         (m.problema_reportado ?? '').toLowerCase().includes(q) ||
         (m.solicitado_por ?? '').toLowerCase().includes(q) ||
@@ -139,7 +146,52 @@ export default function MantenimientosView({
     (m) => m.estado_mantenimiento !== 'Completado' && esVencido(m.fecha_requerimiento)
   ).length;
 
+  function handleVerInforme(m: Mantenimiento) {
+    setInformeMantenimiento(m);
+    setInformeModalOpen(true);
+  }
+
+  async function handleReabrirMantenimiento(m: Mantenimiento) {
+    if (
+      !confirm(
+        `¿Deseas reabrir la orden de trabajo ${m.codigo} para corregir datos?\n\nEl informe técnico (${m.numero_informe || 'asociado'}) será anulado y el estado regresará a "En proceso" para permitir su modificación.`
+      )
+    ) {
+      return;
+    }
+    const { error } = await supabase
+      .from('mantenimientos')
+      .update({
+        estado_mantenimiento: 'En proceso',
+        numero_informe: null,
+        fecha_emision_informe: null,
+      })
+      .eq('id', m.id);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    if (m.equipo_id) {
+      await supabase.from('equipos').update({ estado: 'Mantenimiento' }).eq('id', m.equipo_id);
+      onEquiposChanged();
+    }
+
+    if (informeModalOpen) {
+      setInformeModalOpen(false);
+      setInformeMantenimiento(null);
+    }
+
+    await fetchMantenimientos();
+  }
+
   async function handleSave(data: MantenimientoFormData) {
+    if (data.estado_mantenimiento === 'En proceso' && (!data.asignado_a || !data.asignado_a.trim())) {
+      setError('Para el estado "En proceso" es obligatorio completar el campo "Asignado a (Técnico / Responsable)"');
+      return;
+    }
+
     const payload = {
       equipo_id: data.equipo_id,
       equipo_identificacion: data.equipo_identificacion,
@@ -157,6 +209,11 @@ export default function MantenimientosView({
       accesorios_adicionales: data.accesorios_adicionales,
       completado_por: data.completado_por,
       recibido_por: data.recibido_por,
+      numero_informe: data.numero_informe ?? null,
+      fecha_emision_informe: data.fecha_emision_informe ?? null,
+      diagnostico_final: data.diagnostico_final ?? null,
+      repuestos_utilizados: data.repuestos_utilizados ?? null,
+      costo: data.costo ?? null,
     };
     if (editandoMant) {
       const { error } = await supabase
@@ -178,16 +235,19 @@ export default function MantenimientosView({
       await fetchMantenimientos();
       return;
     }
-    const insertPayload = { ...payload, estado_mantenimiento: 'Pendiente de Asignación' as EstadoMantenimiento };
+    const nuevoEstado =
+      data.estado_mantenimiento || (data.asignado_a ? 'En proceso' : 'Pendiente de Asignación');
+    const insertPayload = { ...payload, estado_mantenimiento: nuevoEstado as EstadoMantenimiento };
     const { error } = await supabase.from('mantenimientos').insert(insertPayload);
     if (error) {
       setError(error.message);
       return;
     }
     if (data.equipo_id) {
+      const nuevoEstadoEq = nuevoEstado === 'Completado' ? 'Operativo' : 'Mantenimiento';
       await supabase
         .from('equipos')
-        .update({ estado: 'Mantenimiento' })
+        .update({ estado: nuevoEstadoEq })
         .eq('id', data.equipo_id);
       onEquiposChanged();
     }
@@ -267,19 +327,116 @@ export default function MantenimientosView({
     toggleEstadoFiltro(key);
   }
 
+  function handleExportCSV() {
+    const tieneFiltros = search.trim() !== '' || filtrosEstado.length > 0 || filtroVencidos;
+    const dataToExport = tieneFiltros ? filtered : mantenimientos;
+
+    if (dataToExport.length === 0) return;
+
+    const headers = [
+      'N° Informe Técnico',
+      'Equipo',
+      'Código/Serie',
+      'Tipo Mantenimiento',
+      'Fecha Programada',
+      'Fecha Realizada',
+      'Responsable / Técnico',
+      'Costo',
+      'Estado',
+      'Diagnóstico Final',
+      'Observaciones',
+    ];
+
+    const escapeCsv = (val: unknown): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const formatDate = (dateStr: string | null | undefined): string => {
+      if (!dateStr) return '';
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return String(dateStr);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      } catch {
+        return String(dateStr);
+      }
+    };
+
+    const rows = dataToExport.map((m) => {
+      const eq = equipos.find((e) => e.id === m.equipo_id);
+      const numeroInforme = m.numero_informe || '';
+      const equipoNombre = m.equipo_identificacion || eq?.nombre || '';
+      const codigoSerie = [m.codigo, eq?.serie].filter(Boolean).join(' / ');
+      const tipoMantenimiento = m.tipo_mantenimiento || '';
+      const fechaProgramada = formatDate(m.fecha_requerimiento);
+      const fechaRealizada = formatDate(m.fecha_cierre);
+      const responsable = m.asignado_a || m.completado_por || '';
+      const costoVal = (m as { costo?: number | string | null }).costo;
+      const costo = costoVal != null ? String(costoVal) : '';
+      const estado = m.estado_mantenimiento || '';
+      const diagnostico = m.diagnostico_final || '';
+
+      const obsParts: string[] = [];
+      if (m.problema_reportado) obsParts.push(`Problema: ${m.problema_reportado}`);
+      if (m.descripcion_trabajo_realizado) obsParts.push(`Trabajo: ${m.descripcion_trabajo_realizado}`);
+      if (m.repuestos_utilizados) obsParts.push(`Repuestos: ${m.repuestos_utilizados}`);
+      if (m.accesorios_adicionales) obsParts.push(`Accesorios: ${m.accesorios_adicionales}`);
+      const observaciones = obsParts.join(' | ') || m.problema_reportado || '';
+
+      return [
+        escapeCsv(numeroInforme),
+        escapeCsv(equipoNombre),
+        escapeCsv(codigoSerie),
+        escapeCsv(tipoMantenimiento),
+        escapeCsv(fechaProgramada),
+        escapeCsv(fechaRealizada),
+        escapeCsv(responsable),
+        escapeCsv(costo),
+        escapeCsv(estado),
+        escapeCsv(diagnostico),
+        escapeCsv(observaciones),
+      ].join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const fileName = `mantenimientos_export_${year}-${month}-${day}.csv`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   const filtrosActivos = filtrosEstado.length + (filtroVencidos ? 1 : 0);
 
   return (
     <div>
-      {error && (
-        <div className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <div className="flex-1">{error}</div>
-          <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700">
-            ×
-          </button>
-        </div>
-      )}
+      <div className={informeModalOpen ? 'print:hidden' : ''}>
+        {error && (
+          <div className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <div className="flex-1">{error}</div>
+            <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700">
+              ×
+            </button>
+          </div>
+        )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
@@ -323,21 +480,35 @@ export default function MantenimientosView({
             />
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
-            <button
-              type="button"
-              onClick={() => setMostrarFiltros((prev) => !prev)}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                mostrarFiltros || filtrosActivos > 0
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <Filter className="h-4 w-4" />
-              Filtros interactivos
-              {filtrosActivos > 0 && (
-                <span className="rounded-full bg-white/20 px-1.5 py-0.5">{filtrosActivos}</span>
-              )}
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMostrarFiltros((prev) => !prev)}
+                className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                  mostrarFiltros || filtrosActivos > 0
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <Filter className="h-4 w-4" />
+                Filtros interactivos
+                {filtrosActivos > 0 && (
+                  <span className="rounded-full bg-white/20 px-1.5 py-0.5">{filtrosActivos}</span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                disabled={filtered.length === 0}
+                title={filtered.length === 0 ? 'No hay registros para exportar' : 'Exportar a CSV'}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none disabled:active:scale-100"
+              >
+                <Download className="h-4 w-4 text-slate-500" />
+                <span>Exportar a CSV</span>
+              </button>
+            </div>
+
             {mostrarFiltros && (
               <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 sm:w-auto">
                 <div className="flex flex-wrap items-center gap-2">
@@ -483,18 +654,31 @@ export default function MantenimientosView({
                     }`}
                   >
                     <td className="px-5 py-4">
-                      <div className="flex items-center gap-1.5">
-                        {vencido && (
-                          <span
-                            className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-100 text-rose-600"
-                            title="Vencido: más de 3 días desde la fecha de requerimiento"
-                          >
-                            <Flag className="h-3 w-3" />
+                      <div className="flex flex-col items-start gap-1">
+                        <div className="flex items-center gap-1.5">
+                          {vencido && (
+                            <span
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-100 text-rose-600"
+                              title="Vencido: más de 3 días desde la fecha de requerimiento"
+                            >
+                              <Flag className="h-3 w-3" />
+                            </span>
+                          )}
+                          <span className="font-mono text-xs font-semibold text-slate-700">
+                            {m.codigo}
                           </span>
+                        </div>
+                        {m.estado_mantenimiento === 'Completado' && (
+                          <button
+                            type="button"
+                            onClick={() => handleVerInforme(m)}
+                            className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-blue-700 ring-1 ring-blue-600/20 hover:bg-blue-100 transition"
+                            title="Ver Informe Técnico emitido"
+                          >
+                            <FileText className="h-3 w-3 text-blue-600" />
+                            <span>{m.numero_informe || `INF-${m.codigo}`}</span>
+                          </button>
                         )}
-                        <span className="font-mono text-xs font-semibold text-slate-700">
-                          {m.codigo}
-                        </span>
                       </div>
                     </td>
                     <td className="px-5 py-4">
@@ -550,7 +734,27 @@ export default function MantenimientosView({
                       </button>
                     </td>
                     <td className="px-5 py-4">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {m.estado_mantenimiento === 'Completado' && (
+                          <>
+                            <button
+                              onClick={() => handleVerInforme(m)}
+                              className="rounded-lg p-2 text-blue-600 transition-colors hover:bg-blue-50"
+                              title="Ver Informe Técnico emitido"
+                              aria-label="Ver informe técnico"
+                            >
+                              <FileText className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleReabrirMantenimiento(m)}
+                              className="rounded-lg p-2 text-amber-600 transition-colors hover:bg-amber-50"
+                              title="Reabrir Mantenimiento / Anular Informe"
+                              aria-label="Reabrir mantenimiento"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => {
                             setEditandoMant(m);
@@ -558,6 +762,7 @@ export default function MantenimientosView({
                           }}
                           className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
                           aria-label="Editar"
+                          title="Editar"
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
@@ -565,6 +770,7 @@ export default function MantenimientosView({
                           onClick={() => handleDelete(m)}
                           className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
                           aria-label="Eliminar"
+                          title="Eliminar"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -586,6 +792,7 @@ export default function MantenimientosView({
           <span className="hidden sm:inline">Módulo de Mantenimiento</span>
         </div>
       </div>
+      </div>
 
       {/* Floating add button */}
       <button
@@ -593,7 +800,7 @@ export default function MantenimientosView({
           setEditandoMant(null);
           setModalOpen(true);
         }}
-        className="fixed bottom-6 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl active:scale-95"
+        className="fixed bottom-6 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl active:scale-95 print:hidden"
         aria-label="Nuevo mantenimiento"
       >
         <Plus className="h-6 w-6" />
@@ -608,6 +815,17 @@ export default function MantenimientosView({
         onSave={handleSave}
         equipos={equipos}
         mantenimientoEdicion={editandoMant}
+      />
+
+      <InformeTecnicoModal
+        open={informeModalOpen}
+        onClose={() => {
+          setInformeModalOpen(false);
+          setInformeMantenimiento(null);
+        }}
+        mantenimiento={informeMantenimiento}
+        equipos={equipos}
+        onReabrir={handleReabrirMantenimiento}
       />
     </div>
   );

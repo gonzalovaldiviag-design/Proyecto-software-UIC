@@ -11,6 +11,7 @@ import {
   Wrench,
   ClipboardList,
   ChevronDown,
+  Download,
 } from 'lucide-react';
 import { useRef, useCallback } from 'react';
 import { supabase, type Equipo, type EstadoEquipo, type EstadoMantenimiento, type ModalidadAdquisicion } from '@/lib/supabase';
@@ -131,6 +132,51 @@ export default function App() {
     return `EQ-${String(max + 1).padStart(3, '0')}`;
   }
 
+  function handleExportCSV() {
+    const hasFilterOrSearch = search.trim() !== '' || estadoFiltro !== 'Todos';
+    const dataToExport = hasFilterOrSearch ? filtered : equipos;
+
+    if (dataToExport.length === 0) return;
+
+    const headers = ['Código', 'Nombre', 'Marca', 'Modelo', 'Serie', 'Ubicación', 'Estado'];
+
+    const escapeCsv = (val: string | number | null | undefined): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const rows = dataToExport.map((eq) =>
+      [
+        escapeCsv(eq.codigo),
+        escapeCsv(eq.nombre),
+        escapeCsv(eq.marca),
+        escapeCsv(eq.modelo),
+        escapeCsv(eq.serie),
+        escapeCsv(eq.ubicacion),
+        escapeCsv(eq.estado),
+      ].join(',')
+    );
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const fileName = `equipos_export_${year}-${month}-${day}.csv`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   function openAdd() {
     setEditing(null);
     setModalOpen(true);
@@ -162,15 +208,34 @@ export default function App() {
   }
 
   async function handleSaveMantenimiento(data: MantenimientoFormData) {
+    const estadoFinal =
+      data.estado_mantenimiento === 'En proceso' && (!data.asignado_a || !data.asignado_a.trim())
+        ? 'Pendiente de Asignación'
+        : data.estado_mantenimiento ||
+          (data.asignado_a ? 'En proceso' : 'Pendiente de Asignación');
+
     const payload = {
       equipo_id: data.equipo_id,
       equipo_identificacion: data.equipo_identificacion,
       problema_reportado: data.problema_reportado,
       solicitado_por: data.solicitado_por,
+      asignado_a: data.asignado_a,
       fecha_requerimiento: data.fecha_requerimiento,
       tipo_mantenimiento: data.tipo_mantenimiento,
-      estado_mantenimiento: 'Pendiente de Asignación' as EstadoMantenimiento,
+      estado_mantenimiento: estadoFinal as EstadoMantenimiento,
       accesorios_adicionales: data.accesorios_adicionales,
+      descripcion_trabajo_realizado: data.descripcion_trabajo_realizado,
+      fecha_cierre: data.fecha_cierre,
+      horas_hombre: data.horas_hombre,
+      fotos_url: data.fotos_url,
+      documentos_url: data.documentos_url,
+      completado_por: data.completado_por,
+      recibido_por: data.recibido_por,
+      numero_informe: data.numero_informe ?? null,
+      fecha_emision_informe: data.fecha_emision_informe ?? null,
+      diagnostico_final: data.diagnostico_final ?? null,
+      repuestos_utilizados: data.repuestos_utilizados ?? null,
+      costo: data.costo ?? null,
     };
     const { error } = await supabase.from('mantenimientos').insert(payload);
     if (error) {
@@ -178,7 +243,8 @@ export default function App() {
       return;
     }
     if (data.equipo_id) {
-      await supabase.from('equipos').update({ estado: 'Mantenimiento' }).eq('id', data.equipo_id);
+      const nuevoEstadoEq = estadoFinal === 'Completado' ? 'Operativo' : 'Mantenimiento';
+      await supabase.from('equipos').update({ estado: nuevoEstadoEq }).eq('id', data.equipo_id);
       await fetchEquipos();
     }
     setMantModalOpen(false);
@@ -247,7 +313,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur-md">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur-md print:hidden">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
@@ -335,26 +401,38 @@ export default function App() {
                     className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                 </div>
-                <div className="flex items-center gap-2">
-                  <Filter className="h-4 w-4 text-slate-400" />
-                  <div className="flex flex-wrap gap-1.5">
-                    {estados.map((e) => {
-                      const active = estadoFiltro === e;
-                      return (
-                        <button
-                          key={e}
-                          onClick={() => setEstadoFiltro(e)}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                            active
-                              ? 'bg-slate-900 text-white shadow-sm'
-                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {e}
-                        </button>
-                      );
-                    })}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <Filter className="h-4 w-4 text-slate-400" />
+                    <div className="flex flex-wrap gap-1.5">
+                      {estados.map((e) => {
+                        const active = estadoFiltro === e;
+                        return (
+                          <button
+                            key={e}
+                            onClick={() => setEstadoFiltro(e)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                              active
+                                ? 'bg-slate-900 text-white shadow-sm'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                          >
+                            {e}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
+
+                  <button
+                    onClick={handleExportCSV}
+                    disabled={filtered.length === 0}
+                    title={filtered.length === 0 ? 'No hay equipos para exportar' : 'Exportar a CSV'}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none disabled:active:scale-100"
+                  >
+                    <Download className="h-4 w-4 text-slate-500" />
+                    <span>Exportar a CSV</span>
+                  </button>
                 </div>
               </div>
 
