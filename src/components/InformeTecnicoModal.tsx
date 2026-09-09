@@ -83,72 +83,204 @@ export default function InformeTecnicoModal({
     setGenerandoPDF(true);
     setMensajeEstado({ tipo: 'info', texto: 'Generando archivo PDF con todas las páginas y secciones del informe...' });
 
+    let staging: HTMLElement | null = null;
+
     try {
-      const elemento = reportRef.current;
+      const sourceReport = reportRef.current;
 
-      // Creamos un clon temporal fuera de pantalla con ancho estándar y altura natural desrestringida
-      const clone = elemento.cloneNode(true) as HTMLElement;
-      clone.id = 'printable-report-pdf-clone';
-      clone.style.position = 'fixed';
-      clone.style.top = '-99999px';
-      clone.style.left = '0';
-      clone.style.width = '800px';
-      clone.style.height = 'auto';
-      clone.style.maxHeight = 'none';
-      clone.style.overflow = 'visible';
-      clone.style.backgroundColor = '#ffffff';
-      clone.style.zIndex = '-9999';
-      clone.style.display = 'block';
+      if (document.fonts) {
+        await document.fonts.ready;
+      }
 
-      // Forzamos que todos los hijos del clon desplieguen su contenido completo sin scrollbars
-      clone.querySelectorAll('*').forEach((el) => {
-        const htmlEl = el as HTMLElement;
-        if (htmlEl.style) {
-          htmlEl.style.maxHeight = 'none';
-          htmlEl.style.overflow = 'visible';
+      staging = document.createElement('div');
+      staging.id = 'pdf-pages-staging-tecnico';
+      staging.style.position = 'fixed';
+      staging.style.top = '-99999px';
+      staging.style.left = '0';
+      staging.style.width = '816px';
+      staging.style.backgroundColor = '#ffffff';
+      staging.style.zIndex = '-9999';
+      staging.style.opacity = '0';
+      staging.style.pointerEvents = 'none';
+      document.body.appendChild(staging);
+
+      const PAGE_WIDTH_PX = 816;
+      const PAGE_HEIGHT_PX = 1056;
+      const PAD_TOP_PX = 57;
+      const PAD_BOTTOM_PX = 57;
+      const PAD_X_PX = 45;
+
+      const directChildren = Array.from(sourceReport.children) as HTMLElement[];
+      const origHeader = directChildren[0];
+      const contentBlocks = directChildren.slice(1, directChildren.length - 1);
+      const origFooter = directChildren[directChildren.length - 1];
+
+      interface PageRecord {
+        pageEl: HTMLElement;
+        headerEl: HTMLElement;
+        contentEl: HTMLElement;
+        footerEl: HTMLElement;
+        pageNumEl: HTMLElement;
+        getUsableHeight: () => number;
+      }
+
+      const pages: PageRecord[] = [];
+
+      const createNewPage = (pageNum: number): PageRecord => {
+        const pageEl = document.createElement('div');
+        pageEl.className = 'pdf-page-container bg-white text-slate-900';
+        pageEl.style.width = `${PAGE_WIDTH_PX}px`;
+        pageEl.style.height = `${PAGE_HEIGHT_PX}px`;
+        pageEl.style.minHeight = `${PAGE_HEIGHT_PX}px`;
+        pageEl.style.maxHeight = `${PAGE_HEIGHT_PX}px`;
+        pageEl.style.boxSizing = 'border-box';
+        pageEl.style.padding = `${PAD_TOP_PX}px ${PAD_X_PX}px ${PAD_BOTTOM_PX}px ${PAD_X_PX}px`;
+        pageEl.style.backgroundColor = '#ffffff';
+        pageEl.style.position = 'relative';
+        pageEl.style.overflow = 'hidden';
+        pageEl.style.display = 'block';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'pdf-page-header';
+        headerEl.style.width = '100%';
+        headerEl.style.marginBottom = '14px';
+        headerEl.style.flexShrink = '0';
+
+        if (pageNum === 1 && origHeader) {
+          const hClone = origHeader.cloneNode(true) as HTMLElement;
+          hClone.classList.remove('pb-5');
+          hClone.classList.add('pb-3.5', 'mb-0');
+          headerEl.appendChild(hClone);
+        } else {
+          headerEl.innerHTML = `
+            <div class="flex items-center justify-between pb-2 border-b-2 border-slate-900 text-xs">
+              <div class="flex items-center gap-2 font-black text-slate-900 uppercase tracking-tight">
+                <div class="flex h-6 w-6 items-center justify-center rounded bg-slate-900 text-white flex-shrink-0">
+                  <svg class="h-3.5 w-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <span>UNIDAD DE EQUIPOS MÉDICOS • INFORME TÉCNICO</span>
+              </div>
+              <div class="font-mono font-black text-slate-900 text-xs">
+                N° ${correlativo}
+              </div>
+            </div>
+          `;
         }
+        pageEl.appendChild(headerEl);
+
+        const contentEl = document.createElement('div');
+        contentEl.className = 'pdf-page-body';
+        contentEl.style.display = 'flex';
+        contentEl.style.flexDirection = 'column';
+        contentEl.style.gap = '14px';
+        contentEl.style.width = '100%';
+        pageEl.appendChild(contentEl);
+
+        const footerEl = document.createElement('div');
+        footerEl.className = 'pdf-page-footer';
+        footerEl.style.position = 'absolute';
+        footerEl.style.bottom = `${PAD_BOTTOM_PX}px`;
+        footerEl.style.left = `${PAD_X_PX}px`;
+        footerEl.style.right = `${PAD_X_PX}px`;
+        footerEl.style.paddingTop = '8px';
+        footerEl.style.borderTop = '1px solid #cbd5e1';
+        footerEl.style.display = 'flex';
+        footerEl.style.alignItems = 'center';
+        footerEl.style.justifyContent = 'space-between';
+        footerEl.style.fontSize = '10px';
+        footerEl.style.color = '#64748b';
+        footerEl.innerHTML = `
+          <span>${origFooter?.textContent || 'Documento Oficial de Registro Clínico'}</span>
+          <span class="pdf-page-num font-semibold text-slate-700">Página ${pageNum}</span>
+        `;
+        pageEl.appendChild(footerEl);
+
+        const pageNumEl = footerEl.querySelector('.pdf-page-num') as HTMLElement;
+
+        staging!.appendChild(pageEl);
+
+        const getUsableHeight = () => {
+          const headerH = headerEl.offsetHeight || (pageNum === 1 ? 130 : 38);
+          return PAGE_HEIGHT_PX - PAD_TOP_PX - headerH - 14 - 36 - PAD_BOTTOM_PX;
+        };
+
+        return { pageEl, headerEl, contentEl, footerEl, pageNumEl, getUsableHeight };
+      };
+
+      let currentPage = createNewPage(1);
+      pages.push(currentPage);
+
+      const addCard = (card: HTMLElement) => {
+        card.classList.remove('mb-6');
+        card.classList.add('mb-0');
+        card.style.flexShrink = '0';
+        card.style.height = 'auto';
+        card.style.maxHeight = 'none';
+        card.style.minHeight = 'auto';
+        card.style.overflow = 'visible';
+        card.style.width = '100%';
+        card.style.boxSizing = 'border-box';
+
+        currentPage.contentEl.appendChild(card);
+
+        const usableH = currentPage.getUsableHeight();
+        const currentContentH = currentPage.contentEl.offsetHeight;
+
+        if (currentContentH > usableH && currentPage.contentEl.children.length > 1) {
+          currentPage.contentEl.removeChild(card);
+          currentPage = createNewPage(pages.length + 1);
+          pages.push(currentPage);
+          currentPage.contentEl.appendChild(card);
+        }
+      };
+
+      contentBlocks.forEach((block) => {
+        addCard(block.cloneNode(true) as HTMLElement);
       });
 
-      document.body.appendChild(clone);
-
-      const canvas = await html2canvas(clone, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        width: 800,
-        windowWidth: 1200,
+      const totalPages = pages.length;
+      pages.forEach((p, idx) => {
+        p.pageNumEl.textContent = `Página ${idx + 1} de ${totalPages}`;
       });
 
-      document.body.removeChild(clone);
+      const allImgs = Array.from(staging.querySelectorAll('img'));
+      if (allImgs.length > 0) {
+        await Promise.all(
+          allImgs.map((img) => {
+            if (img.complete) return Promise.resolve();
+            return new Promise((resolve) => {
+              img.onload = resolve;
+              img.onerror = resolve;
+            });
+          })
+        );
+      }
 
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
-        format: 'a4',
+        format: 'letter',
       });
 
-      const pageWidth = 210;
-      const pageHeight = 297;
-      const marginX = 10;
-      const marginY = 10;
-      const printableWidth = pageWidth - marginX * 2; // 190 mm
-      const printableHeight = pageHeight - marginY * 2; // 277 mm
-      const imgHeight = (canvas.height * printableWidth) / canvas.width;
-
-      const imgData = canvas.toDataURL('image/png');
-
-      let heightLeft = imgHeight;
-      let page = 0;
-
-      while (heightLeft > 0) {
-        if (page > 0) {
+      for (let i = 0; i < totalPages; i++) {
+        if (i > 0) {
           pdf.addPage();
         }
-        const yOffset = marginY - page * printableHeight;
-        pdf.addImage(imgData, 'PNG', marginX, yOffset, printableWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= printableHeight;
-        page++;
+
+        const pageCanvas = await html2canvas(pages[i].pageEl, {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+          width: PAGE_WIDTH_PX,
+          height: PAGE_HEIGHT_PX,
+          windowWidth: 1200,
+        });
+
+        const imgData = pageCanvas.toDataURL('image/jpeg', 0.98);
+        pdf.addImage(imgData, 'JPEG', 0, 0, 215.9, 279.4, undefined, 'FAST');
       }
 
       const nombreLimpio = correlativo.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -168,6 +300,9 @@ export default function InformeTecnicoModal({
       });
       setTimeout(() => setMensajeEstado(null), 5000);
     } finally {
+      if (staging && staging.parentNode) {
+        staging.parentNode.removeChild(staging);
+      }
       setGenerandoPDF(false);
     }
   };

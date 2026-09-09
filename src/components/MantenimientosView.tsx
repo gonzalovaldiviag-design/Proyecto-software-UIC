@@ -18,8 +18,9 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
+import { enrichMantenimiento, saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
-import InformeTecnicoModal from '@/components/InformeTecnicoModal';
+import InformeMantenimientoModal from '@/components/InformeMantenimientoModal';
 
 const estadosM: EstadoMantenimiento[] = [
   'Pendiente de Asignación',
@@ -111,7 +112,8 @@ export default function MantenimientosView({
     if (error) {
       setError(error.message);
     } else {
-      setMantenimientos((data as Mantenimiento[]) ?? []);
+      const enriched = ((data as Mantenimiento[]) ?? []).map(enrichMantenimiento);
+      setMantenimientos(enriched);
     }
     setLoading(false);
   }
@@ -154,7 +156,7 @@ export default function MantenimientosView({
   async function handleReabrirMantenimiento(m: Mantenimiento) {
     if (
       !confirm(
-        `¿Deseas reabrir la orden de trabajo ${m.codigo} para corregir datos?\n\nEl informe técnico (${m.numero_informe || 'asociado'}) será anulado y el estado regresará a "En proceso" para permitir su modificación.`
+        `¿Confirmas la reapertura de la orden de trabajo ${m.codigo}?\n\nSu estado cambiará a "En proceso" para que puedas corregir cualquier dato sin borrar el historial previo ni el correlativo técnico (${m.numero_informe || 'asignado'}).`
       )
     ) {
       return;
@@ -163,8 +165,6 @@ export default function MantenimientosView({
       .from('mantenimientos')
       .update({
         estado_mantenimiento: 'En proceso',
-        numero_informe: null,
-        fecha_emision_informe: null,
       })
       .eq('id', m.id);
 
@@ -184,6 +184,13 @@ export default function MantenimientosView({
     }
 
     await fetchMantenimientos();
+
+    // Abrir directamente la orden en el modal para editar de inmediato
+    setEditandoMant({
+      ...m,
+      estado_mantenimiento: 'En proceso',
+    });
+    setModalOpen(true);
   }
 
   async function handleSave(data: MantenimientoFormData) {
@@ -191,6 +198,9 @@ export default function MantenimientosView({
       setError('Para el estado "En proceso" es obligatorio completar el campo "Asignado a (Técnico / Responsable)"');
       return;
     }
+
+    const estadoFinal =
+      data.estado_mantenimiento || (data.asignado_a ? 'En proceso' : 'Pendiente de Asignación');
 
     const payload = {
       equipo_id: data.equipo_id,
@@ -200,7 +210,7 @@ export default function MantenimientosView({
       asignado_a: data.asignado_a,
       fecha_requerimiento: data.fecha_requerimiento,
       tipo_mantenimiento: data.tipo_mantenimiento,
-      estado_mantenimiento: data.estado_mantenimiento,
+      estado_mantenimiento: editandoMant ? data.estado_mantenimiento : (estadoFinal as EstadoMantenimiento),
       descripcion_trabajo_realizado: data.descripcion_trabajo_realizado,
       fecha_cierre: data.fecha_cierre,
       horas_hombre: data.horas_hombre,
@@ -215,43 +225,30 @@ export default function MantenimientosView({
       repuestos_utilizados: data.repuestos_utilizados ?? null,
       costo: data.costo ?? null,
     };
-    if (editandoMant) {
-      const { error } = await supabase
-        .from('mantenimientos')
-        .update(payload)
-        .eq('id', editandoMant.id);
-      if (error) {
-        setError(error.message);
-        return;
-      }
-      if (data.equipo_id) {
-        const nuevoEstadoEq =
-          data.estado_mantenimiento === 'Completado' ? 'Operativo' : 'Mantenimiento';
-        await supabase.from('equipos').update({ estado: nuevoEstadoEq }).eq('id', data.equipo_id);
-        onEquiposChanged();
-      }
-      setModalOpen(false);
-      setEditandoMant(null);
-      await fetchMantenimientos();
+
+    const { error: saveError } = await saveMantenimientoRecord({
+      id: editandoMant?.id,
+      codigo: editandoMant?.codigo,
+      isEdit: Boolean(editandoMant),
+      payload,
+    });
+
+    if (saveError) {
+      setError(saveError.message);
       return;
     }
-    const nuevoEstado =
-      data.estado_mantenimiento || (data.asignado_a ? 'En proceso' : 'Pendiente de Asignación');
-    const insertPayload = { ...payload, estado_mantenimiento: nuevoEstado as EstadoMantenimiento };
-    const { error } = await supabase.from('mantenimientos').insert(insertPayload);
-    if (error) {
-      setError(error.message);
-      return;
-    }
+
     if (data.equipo_id) {
-      const nuevoEstadoEq = nuevoEstado === 'Completado' ? 'Operativo' : 'Mantenimiento';
-      await supabase
-        .from('equipos')
-        .update({ estado: nuevoEstadoEq })
-        .eq('id', data.equipo_id);
+      const nuevoEstadoEq =
+        (editandoMant ? data.estado_mantenimiento : estadoFinal) === 'Completado'
+          ? 'Operativo'
+          : 'Mantenimiento';
+      await supabase.from('equipos').update({ estado: nuevoEstadoEq }).eq('id', data.equipo_id);
       onEquiposChanged();
     }
+
     setModalOpen(false);
+    setEditandoMant(null);
     await fetchMantenimientos();
   }
 
@@ -429,10 +426,21 @@ export default function MantenimientosView({
     <div>
       <div className={informeModalOpen ? 'print:hidden' : ''}>
         {error && (
-          <div className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <div className="flex-1">{error}</div>
-            <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700">
+          <div
+            id="mantenimiento-error-banner"
+            className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/95 p-4 text-sm text-rose-800 shadow-sm"
+          >
+            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-600" />
+            <div className="flex-1 min-w-0">
+              <span className="font-semibold block text-rose-900 mb-0.5">Aviso del Sistema</span>
+              <p className="text-xs text-rose-700 leading-relaxed break-words">{error}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="text-rose-400 hover:text-rose-700 p-1 rounded-lg hover:bg-rose-100/80 transition-colors"
+              aria-label="Cerrar aviso de error"
+            >
               ×
             </button>
           </div>
@@ -722,16 +730,29 @@ export default function MantenimientosView({
                       </div>
                     </td>
                     <td className="px-5 py-4">
-                      <button
-                        onClick={() => {
-                          setEditandoMant(m);
-                          setModalOpen(true);
-                        }}
-                        className="transition-transform hover:scale-105"
-                        title="Editar mantenimiento"
-                      >
-                        <EstadoMBadge estado={m.estado_mantenimiento} />
-                      </button>
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          onClick={() => {
+                            setEditandoMant(m);
+                            setModalOpen(true);
+                          }}
+                          className="transition-transform hover:scale-105 text-left"
+                          title="Editar mantenimiento"
+                        >
+                          <EstadoMBadge estado={m.estado_mantenimiento} />
+                        </button>
+                        {m.estado_mantenimiento === 'Completado' && m.numero_informe && (
+                          <button
+                            type="button"
+                            onClick={() => handleVerInforme(m)}
+                            className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-blue-700 ring-1 ring-inset ring-blue-700/20 hover:bg-blue-100 transition shadow-xs"
+                            title="Ver Informe Técnico"
+                          >
+                            <FileText className="h-3 w-3 text-blue-600" />
+                            <span>{m.numero_informe}</span>
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex items-center justify-end gap-1.5">
@@ -740,7 +761,11 @@ export default function MantenimientosView({
                             <button
                               onClick={() => handleVerInforme(m)}
                               className="rounded-lg p-2 text-blue-600 transition-colors hover:bg-blue-50"
-                              title="Ver Informe Técnico emitido"
+                              title={
+                                m.numero_informe
+                                  ? `Ver Informe Técnico (${m.numero_informe})`
+                                  : 'Ver Informe Técnico'
+                              }
                               aria-label="Ver informe técnico"
                             >
                               <FileText className="h-4 w-4" />
@@ -748,8 +773,8 @@ export default function MantenimientosView({
                             <button
                               onClick={() => handleReabrirMantenimiento(m)}
                               className="rounded-lg p-2 text-amber-600 transition-colors hover:bg-amber-50"
-                              title="Reabrir Mantenimiento / Anular Informe"
-                              aria-label="Reabrir mantenimiento"
+                              title="Reabrir Orden / Modificar Datos"
+                              aria-label="Reabrir orden de trabajo"
                             >
                               <RotateCcw className="h-4 w-4" />
                             </button>
@@ -817,13 +842,14 @@ export default function MantenimientosView({
         mantenimientoEdicion={editandoMant}
       />
 
-      <InformeTecnicoModal
+      <InformeMantenimientoModal
         open={informeModalOpen}
         onClose={() => {
           setInformeModalOpen(false);
           setInformeMantenimiento(null);
         }}
         mantenimiento={informeMantenimiento}
+        equipo={equipos.find((e) => e.id === informeMantenimiento?.equipo_id)}
         equipos={equipos}
         onReabrir={handleReabrirMantenimiento}
       />

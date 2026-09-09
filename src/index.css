@@ -4,8 +4,8 @@
 
 @media print {
   @page {
-    size: A4 portrait;
-    margin: 10mm 12mm;
+    size: letter portrait;
+    margin: 15mm 12mm 15mm 12mm;
   }
 
   html,
@@ -14,7 +14,7 @@
     background: #ffffff !important;
     color: #0f172a !important;
     height: auto !important;
-    min-height: 100% !important;
+    min-height: auto !important;
     max-height: none !important;
     overflow: visible !important;
     position: static !important;
@@ -23,13 +23,17 @@
   }
 
   /* Hide navigation, buttons, and anything marked as print:hidden */
-  header,
   nav,
   aside,
   button,
   .print-hide,
   .print\:hidden {
     display: none !important;
+  }
+
+  /* Keep report header visible */
+  #printable-report header {
+    display: block !important;
   }
 
   /* When printing the report modal, unconstrain layout to allow natural multi-page flow */
@@ -83,6 +87,8 @@
   /* Prevent page breaks inside cards, tables, signatures */
   .break-inside-avoid,
   .print-avoid-break,
+  .pdf-block,
+  section,
   table,
   tr,
   .rounded-xl {

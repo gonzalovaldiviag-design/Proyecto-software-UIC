@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   DollarSign,
   Package,
+  ExternalLink,
+  Info,
 } from 'lucide-react';
 import {
   supabase,
@@ -20,6 +22,11 @@ import {
   type TipoMantenimiento,
   type EstadoMantenimiento,
 } from '@/lib/supabase';
+import {
+  getNombreArchivo,
+  compressImageToDataUrl,
+  processDocumentFile,
+} from '@/lib/fileUtils';
 
 export interface MantenimientoFormData {
   equipo_id: string | null;
@@ -95,6 +102,7 @@ export default function MantenimientoModal({
 
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const asignadoInputRef = useRef<HTMLInputElement>(null);
 
@@ -102,6 +110,7 @@ export default function MantenimientoModal({
     if (open) {
       setTouched(false);
       setEstadoError('');
+      setStorageNotice(null);
       setReabiertoAviso(null);
       if (mantenimientoEdicion) {
         const eq = equipos.find((e) => e.id === mantenimientoEdicion.equipo_id);
@@ -187,15 +196,15 @@ export default function MantenimientoModal({
 
   // Validación rigurosa de campos requeridos para cierre con Informe Técnico
   const camposPendientesCierre: string[] = [];
-  if (modoEquipo === 'registrado' ? !equipoId : !equipoManual.trim()) {
-    camposPendientesCierre.push('Identificación del equipo');
+  if (!descripcionTrabajo.trim()) {
+    camposPendientesCierre.push('Descripción del trabajo realizado');
   }
-  if (!fecha.trim()) camposPendientesCierre.push('Fecha de requerimiento');
-  if (!fechaCierre.trim()) camposPendientesCierre.push('Fecha de realización');
-  if (!completadoPor.trim()) camposPendientesCierre.push('Técnico responsable');
-  if (!recibidoPor.trim()) camposPendientesCierre.push('Recibido por (conformidad)');
-  if (!descripcionTrabajo.trim()) camposPendientesCierre.push('Descripción del trabajo realizado');
-  if (!diagnosticoFinal.trim()) camposPendientesCierre.push('Resultado / Diagnóstico técnico');
+  if (!diagnosticoFinal.trim()) {
+    camposPendientesCierre.push('Diagnóstico final / Resultado de pruebas');
+  }
+  if (!completadoPor.trim()) {
+    camposPendientesCierre.push('Técnico responsable (Completado por)');
+  }
 
   const cierreValido = camposPendientesCierre.length === 0;
 
@@ -210,99 +219,174 @@ export default function MantenimientoModal({
     estadoError === '';
 
   const correlativoProyectado =
-    numeroInforme ||
     mantenimientoEdicion?.numero_informe ||
+    numeroInforme ||
     generarNumeroInforme(mantenimientoEdicion?.codigo ?? 'MANT-001');
 
   function handleReabrirMantenimiento() {
     if (
       !confirm(
-        '¿Deseas reabrir esta orden de trabajo para corregir datos? El informe técnico actual será anulado y el mantenimiento volverá a estado "En proceso" para su edición.'
+        '¿Confirmas la reapertura de esta orden de trabajo? Su estado cambiará a "En proceso" para permitirte modificar o corregir cualquier dato sin perder el historial previo.'
       )
     ) {
       return;
     }
     setEstado('En proceso');
-    setNumeroInforme(null);
-    setFechaEmisionInforme(null);
+    // Conservamos el correlativo asignado previamente
     setReabiertoAviso(
-      'La orden de trabajo fue reabierta a "En proceso". El informe previo ha sido anulado. Puedes modificar cualquier parámetro y volver a completarla.'
+      'La orden de trabajo fue reabierta a "En proceso". Los campos ahora son editables para corregir datos. El correlativo técnico asignado se mantendrá al volver a completar la orden.'
     );
     setEstadoError('');
   }
 
   async function handlePhotoUpload(files: FileList) {
-    if (!mantenimientoEdicion) return;
     if (fotosUrls.length >= 10) {
       setEstadoError('No se pueden subir más de 10 fotografías');
       return;
     }
     setUploadingPhoto(true);
+    setEstadoError('');
+    let usedLocalFallback = false;
+
     try {
       const newUrls: string[] = [];
+      const prefix = mantenimientoEdicion?.id || `mant-${Date.now()}`;
+
       for (const file of Array.from(files)) {
         if (fotosUrls.length + newUrls.length >= 10) break;
-        const ext = file.name.split('.').pop() ?? 'jpg';
-        const fileName = `${mantenimientoEdicion.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error } = await supabase.storage
-          .from('mantenimientos')
-          .upload(fileName, file);
-        if (error) throw error;
-        const { data: pubData } = supabase.storage
-          .from('mantenimientos')
-          .getPublicUrl(fileName);
-        newUrls.push(pubData.publicUrl);
+        const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const fileName = `${prefix}/${Date.now()}-${cleanName}`;
+        let finalUrl: string | null = null;
+
+        // Intentar subir a Supabase Storage
+        try {
+          const { data, error } = await supabase.storage
+            .from('mantenimientos')
+            .upload(fileName, file, { upsert: true });
+
+          if (!error && data) {
+            const { data: pubData } = supabase.storage
+              .from('mantenimientos')
+              .getPublicUrl(fileName);
+            if (pubData?.publicUrl) {
+              finalUrl = pubData.publicUrl;
+            }
+          } else {
+            console.warn('[Storage] Supabase bucket warning, fallback local:', error?.message);
+          }
+        } catch (storageErr) {
+          console.warn('[Storage] Fallback local tras error de conexión a Supabase:', storageErr);
+        }
+
+        // Si el bucket no existe en Supabase o falló la subida remota, respaldo a DataURL comprimida
+        if (!finalUrl) {
+          usedLocalFallback = true;
+          finalUrl = await compressImageToDataUrl(file);
+        }
+
+        newUrls.push(finalUrl);
       }
+
       setFotosUrls((prev) => [...prev, ...newUrls]);
+
+      if (usedLocalFallback) {
+        setStorageNotice(
+          'Fotos adjuntadas y optimizadas localmente. (Nota: Si deseas guardarlas en Supabase Storage, crea el bucket público llamado "mantenimientos" en tu consola de Supabase).'
+        );
+      }
     } catch (err) {
-      setEstadoError('Error al subir la foto: ' + (err as Error).message);
+      setEstadoError('Error al procesar fotografía: ' + (err as Error).message);
     } finally {
       setUploadingPhoto(false);
     }
   }
 
   async function handleDocumentosUpload(files: FileList) {
-    if (!mantenimientoEdicion) return;
     if (documentosUrls.length >= 10) {
       setEstadoError('No se pueden subir más de 10 documentos');
       return;
     }
     setUploadingDoc(true);
+    setEstadoError('');
+    let usedLocalFallback = false;
+
     try {
       const newUrls: string[] = [];
+      const prefix = mantenimientoEdicion?.id || `mant-${Date.now()}`;
+
       for (const file of Array.from(files)) {
         if (documentosUrls.length + newUrls.length >= 10) break;
-        const ext = file.name.split('.').pop() ?? 'pdf';
-        const fileName = `${mantenimientoEdicion.id}/doc-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error } = await supabase.storage
-          .from('mantenimientos')
-          .upload(fileName, file);
-        if (error) throw error;
-        const { data: pubData } = supabase.storage
-          .from('mantenimientos')
-          .getPublicUrl(fileName);
-        newUrls.push(pubData.publicUrl);
+        const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const fileName = `${prefix}/doc-${Date.now()}-${cleanName}`;
+        let finalUrl: string | null = null;
+
+        // Intentar subir a Supabase Storage
+        try {
+          const { data, error } = await supabase.storage
+            .from('mantenimientos')
+            .upload(fileName, file, { upsert: true });
+
+          if (!error && data) {
+            const { data: pubData } = supabase.storage
+              .from('mantenimientos')
+              .getPublicUrl(fileName);
+            if (pubData?.publicUrl) {
+              finalUrl = pubData.publicUrl;
+            }
+          } else {
+            console.warn('[Storage] Supabase bucket warning, fallback local:', error?.message);
+          }
+        } catch (storageErr) {
+          console.warn('[Storage] Fallback local tras error de conexión a Supabase:', storageErr);
+        }
+
+        // Si el bucket no existe en Supabase o falló la subida remota, respaldo a DataURL
+        if (!finalUrl) {
+          usedLocalFallback = true;
+          finalUrl = await processDocumentFile(file);
+        }
+
+        newUrls.push(finalUrl);
       }
+
       setDocumentosUrls((prev) => [...prev, ...newUrls]);
+
+      if (usedLocalFallback) {
+        setStorageNotice(
+          'Documentos adjuntados correctamente de forma embebida. (Nota: Si deseas guardarlos en Supabase Storage, crea el bucket público llamado "mantenimientos" en tu consola de Supabase).'
+        );
+      }
     } catch (err) {
-      setEstadoError('Error al subir el documento: ' + (err as Error).message);
+      setEstadoError('Error al procesar documento: ' + (err as Error).message);
     } finally {
       setUploadingDoc(false);
     }
   }
 
   async function removeFoto(url: string) {
-    const path = url.split('/mantenimientos/').pop();
-    if (path) {
-      await supabase.storage.from('mantenimientos').remove([path]);
+    if (!url.startsWith('data:')) {
+      const path = url.split('/mantenimientos/').pop();
+      if (path) {
+        try {
+          await supabase.storage.from('mantenimientos').remove([path]);
+        } catch {
+          // ignore
+        }
+      }
     }
     setFotosUrls((prev) => prev.filter((u) => u !== url));
   }
 
   async function removeDocumento(url: string) {
-    const path = url.split('/mantenimientos/').pop();
-    if (path) {
-      await supabase.storage.from('mantenimientos').remove([path]);
+    if (!url.startsWith('data:')) {
+      const path = url.split('/mantenimientos/').pop();
+      if (path) {
+        try {
+          await supabase.storage.from('mantenimientos').remove([path]);
+        } catch {
+          // ignore
+        }
+      }
     }
     setDocumentosUrls((prev) => prev.filter((u) => u !== url));
   }
@@ -326,7 +410,7 @@ export default function MantenimientoModal({
     }
     if (completadoRequerido && !cierreValido) {
       setEstadoError(
-        `Para cerrar con Informe Técnico debes completar: ${camposPendientesCierre.join(', ')}`
+        `Para marcar como Completado es obligatorio completar: ${camposPendientesCierre.join(', ')}`
       );
       return;
     }
@@ -336,6 +420,22 @@ export default function MantenimientoModal({
       estado === 'Pendiente de Asignación' && asignadoA.trim() !== ''
         ? 'En proceso'
         : estado;
+
+    const codigoOT = mantenimientoEdicion?.codigo || 'MANT-001';
+    const finalNumeroInforme =
+      finalEstado === 'Completado'
+        ? (mantenimientoEdicion?.numero_informe || numeroInforme || generarNumeroInforme(codigoOT))
+        : (mantenimientoEdicion?.numero_informe || numeroInforme || null);
+
+    const finalFechaEmisionInforme =
+      finalEstado === 'Completado'
+        ? (mantenimientoEdicion?.fecha_emision_informe || fechaEmisionInforme || new Date().toISOString())
+        : (mantenimientoEdicion?.fecha_emision_informe || fechaEmisionInforme || null);
+
+    const finalFechaCierre =
+      finalEstado === 'Completado'
+        ? (fechaCierre.trim() || new Date().toISOString().slice(0, 10))
+        : (fechaCierre.trim() || null);
 
     onSave({
       equipo_id: modoEquipo === 'registrado' ? equipoId || null : null,
@@ -347,7 +447,7 @@ export default function MantenimientoModal({
       tipo_mantenimiento: tipo,
       estado_mantenimiento: finalEstado,
       descripcion_trabajo_realizado: descripcionTrabajo.trim() || null,
-      fecha_cierre: fechaCierre || null,
+      fecha_cierre: finalFechaCierre,
       horas_hombre: horasHombre.trim() === '' ? null : Number(horasHombre),
       fotos_url: fotosUrls.length > 0 ? fotosUrls : null,
       documentos_url: documentosUrls.length > 0 ? documentosUrls : null,
@@ -357,11 +457,8 @@ export default function MantenimientoModal({
       diagnostico_final: diagnosticoFinal.trim() || null,
       repuestos_utilizados: repuestosUtilizados.trim() || null,
       costo: costo.trim() === '' ? null : Number(costo),
-      numero_informe: finalEstado === 'Completado' ? correlativoProyectado : null,
-      fecha_emision_informe:
-        finalEstado === 'Completado'
-          ? fechaEmisionInforme || new Date().toISOString()
-          : null,
+      numero_informe: finalNumeroInforme,
+      fecha_emision_informe: finalFechaEmisionInforme,
     });
   };
 
@@ -394,25 +491,29 @@ export default function MantenimientoModal({
 
         <form onSubmit={handleSubmit} className="max-h-[75vh] overflow-y-auto px-6 py-5">
           {/* Banner si está completado con Informe Técnico */}
-          {esEdicion && mantenimientoEdicion?.estado_mantenimiento === 'Completado' && estado === 'Completado' && (
-            <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-900">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+          {esEdicion && estado === 'Completado' && (
+            <div className="mb-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-950 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 flex-shrink-0">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
                 <div>
-                  <span className="font-semibold">Mantenimiento Completado con Informe Técnico:</span>{' '}
-                  <span className="font-mono font-bold text-emerald-800">
-                    {mantenimientoEdicion.numero_informe || correlativoProyectado}
-                  </span>
+                  <div className="font-bold text-sm text-slate-900">
+                    Mantenimiento Cerrado con Informe Técnico
+                  </div>
+                  <div className="text-xs text-slate-600 mt-0.5">
+                    Correlativo: <span className="font-mono font-bold text-blue-700">{correlativoProyectado}</span>
+                  </div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={handleReabrirMantenimiento}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 font-semibold text-amber-800 shadow-sm transition hover:bg-amber-50 active:scale-95"
-                title="Reabrir esta orden de trabajo para corregir datos"
+                className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 active:scale-95 whitespace-nowrap"
+                title="Reabrir esta orden de trabajo para corregir datos sin borrar el historial previo"
               >
-                <RotateCcw className="h-3.5 w-3.5 text-amber-700" />
-                <span>Reabrir / Anular Informe</span>
+                <RotateCcw className="h-4 w-4" />
+                <span>Reabrir Orden / Modificar Datos</span>
               </button>
             </div>
           )}
@@ -893,17 +994,25 @@ export default function MantenimientoModal({
                     {fotosUrls.map((url) => (
                       <div
                         key={url}
-                        className="group relative overflow-hidden rounded-lg border border-slate-200"
+                        className="group relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
                       >
-                        <img
-                          src={url}
-                          alt="Foto"
-                          className="h-16 w-full object-cover"
-                        />
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block h-16 w-full cursor-zoom-in"
+                          title="Click para ver en tamaño completo"
+                        >
+                          <img
+                            src={url}
+                            alt="Evidencia fotográfica"
+                            className="h-16 w-full object-cover transition-transform group-hover:scale-105"
+                          />
+                        </a>
                         <button
                           type="button"
                           onClick={() => removeFoto(url)}
-                          className="absolute right-1 top-1 rounded-md bg-rose-600/90 p-1 text-white opacity-0 transition group-hover:opacity-100"
+                          className="absolute right-1 top-1 rounded-md bg-rose-600/90 p-1 text-white opacity-0 transition group-hover:opacity-100 shadow"
                           aria-label="Eliminar foto"
                         >
                           <Trash2 className="h-3 w-3" />
@@ -951,20 +1060,28 @@ export default function MantenimientoModal({
                 {documentosUrls.length > 0 && (
                   <div className="mt-2.5 space-y-2">
                     {documentosUrls.map((url) => {
-                      const name = url.split('/').pop() ?? 'documento';
+                      const name = getNombreArchivo(url);
                       return (
                         <div
                           key={url}
-                          className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                          className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs hover:border-slate-300 transition-colors"
                         >
-                          <div className="flex items-center gap-2 text-slate-700 truncate">
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={name}
+                            className="flex items-center gap-2 text-slate-700 hover:text-blue-600 truncate font-medium group"
+                            title="Click para ver o descargar"
+                          >
                             <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                            <span className="truncate">{name}</span>
-                          </div>
+                            <span className="truncate max-w-[280px] sm:max-w-md">{name}</span>
+                            <ExternalLink className="h-3 w-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                          </a>
                           <button
                             type="button"
                             onClick={() => removeDocumento(url)}
-                            className="rounded p-1 text-slate-400 hover:text-rose-600"
+                            className="rounded p-1 text-slate-400 hover:text-rose-600 transition-colors flex-shrink-0"
                             aria-label="Eliminar documento"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -972,6 +1089,24 @@ export default function MantenimientoModal({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Aviso informativo de almacenamiento local / Supabase */}
+                {storageNotice && (
+                  <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50/80 p-2.5 text-xs text-blue-900 shadow-sm">
+                    <Info className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 text-[11px] leading-relaxed">
+                      <span>{storageNotice}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setStorageNotice(null)}
+                      className="text-blue-400 hover:text-blue-700 p-0.5"
+                      aria-label="Cerrar aviso"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 )}
               </div>
@@ -1015,6 +1150,17 @@ export default function MantenimientoModal({
           )}
 
           <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-4">
+            {esEdicion && estado === 'Completado' && (
+              <button
+                type="button"
+                onClick={handleReabrirMantenimiento}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs font-bold text-amber-800 shadow-sm transition hover:bg-amber-100 active:scale-95 mr-auto"
+                title="Reabrir orden de trabajo y pasar a 'En proceso' para corregir datos"
+              >
+                <RotateCcw className="h-3.5 w-3.5 text-amber-700" />
+                <span>Reabrir Orden / Modificar Datos</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}

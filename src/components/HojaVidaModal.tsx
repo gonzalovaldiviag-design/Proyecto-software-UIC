@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { supabase, type Equipo, type Mantenimiento } from '@/lib/supabase';
 import EstadoBadge from '@/components/EstadoBadge';
+import { getNombreArchivo } from '@/lib/fileUtils';
 
 interface HojaVidaModalProps {
   open: boolean;
@@ -297,17 +298,18 @@ export default function HojaVidaModal({ open, onClose, equipo }: HojaVidaModalPr
                           {m.documentos_url && m.documentos_url.length > 0 && (
                             <div className="col-span-full space-y-1">
                               {m.documentos_url.map((url) => {
-                                const name = url.split('/').pop() ?? 'documento';
+                                const name = getNombreArchivo(url);
                                 return (
                                   <a
                                     key={url}
                                     href={url}
                                     target="_blank"
                                     rel="noopener noreferrer"
+                                    download={name}
                                     className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700"
                                   >
-                                    <FileText className="h-3.5 w-3.5" />
-                                    {name}
+                                    <FileText className="h-3.5 w-3.5 flex-shrink-0" />
+                                    <span className="truncate max-w-xs">{name}</span>
                                   </a>
                                 );
                               })}

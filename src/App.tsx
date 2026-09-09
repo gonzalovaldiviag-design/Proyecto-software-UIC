@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useRef, useCallback } from 'react';
 import { supabase, type Equipo, type EstadoEquipo, type EstadoMantenimiento, type ModalidadAdquisicion } from '@/lib/supabase';
+import { saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
 import Dashboard from '@/components/Dashboard';
 import EstadoBadge from '@/components/EstadoBadge';
 import EquipoModal from '@/components/EquipoModal';
@@ -114,7 +115,11 @@ export default function App() {
         (e.modelo ?? '').toLowerCase().includes(q) ||
         (e.serie ?? '').toLowerCase().includes(q) ||
         (e.ubicacion ?? '').toLowerCase().includes(q);
-      const matchEstado = estadoFiltro === 'Todos' || e.estado === estadoFiltro;
+      const matchEstado =
+        estadoFiltro === 'Todos' ||
+        e.estado === estadoFiltro ||
+        ((estadoFiltro === 'Mantenimiento' || (estadoFiltro as string) === 'En Mantenimiento') &&
+          (e.estado === 'Mantenimiento' || (e.estado as string) === 'En Mantenimiento'));
       return matchSearch && matchEstado;
     });
   }, [equipos, search, estadoFiltro]);
@@ -138,7 +143,7 @@ export default function App() {
 
     if (dataToExport.length === 0) return;
 
-    const headers = ['Código', 'Nombre', 'Marca', 'Modelo', 'Serie', 'Ubicación', 'Estado'];
+    const headers = ['Código', 'Servicio Clínico', 'Nombre', 'Marca', 'Modelo', 'Serie', 'Estado'];
 
     const escapeCsv = (val: string | number | null | undefined): string => {
       if (val === null || val === undefined) return '""';
@@ -149,11 +154,11 @@ export default function App() {
     const rows = dataToExport.map((eq) =>
       [
         escapeCsv(eq.codigo),
+        escapeCsv(eq.ubicacion),
         escapeCsv(eq.nombre),
         escapeCsv(eq.marca),
         escapeCsv(eq.modelo),
         escapeCsv(eq.serie),
-        escapeCsv(eq.ubicacion),
         escapeCsv(eq.estado),
       ].join(',')
     );
@@ -237,7 +242,10 @@ export default function App() {
       repuestos_utilizados: data.repuestos_utilizados ?? null,
       costo: data.costo ?? null,
     };
-    const { error } = await supabase.from('mantenimientos').insert(payload);
+    const { error } = await saveMantenimientoRecord({
+      isEdit: false,
+      payload,
+    });
     if (error) {
       setError(error.message);
       return;
@@ -386,6 +394,8 @@ export default function App() {
               total={total}
               operativos={operativos}
               mantenimiento={mantenimiento}
+              selectedEstado={estadoFiltro}
+              onSelectEstado={setEstadoFiltro}
             />
 
             <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
@@ -445,6 +455,9 @@ export default function App() {
                         Código / ID
                       </th>
                       <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Servicio Clínico
+                      </th>
+                      <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
                         Nombre / Equipo
                       </th>
                       <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -457,12 +470,8 @@ export default function App() {
                         Serie
                       </th>
                       <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                        Servicio Clínico
-                      </th>
-                      <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
                         Estado
                       </th>
-
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -538,6 +547,9 @@ export default function App() {
                               )}
                             </div>
                           </td>
+                          <td className="px-5 py-4 text-sm text-slate-700 font-medium">
+                            {eq.ubicacion ?? '—'}
+                          </td>
                           <td className="px-5 py-4">
                             <span className="text-sm font-medium text-slate-900">{eq.nombre}</span>
                           </td>
@@ -551,9 +563,6 @@ export default function App() {
                             <span className="font-mono text-xs text-slate-600">
                               {eq.serie ?? '—'}
                             </span>
-                          </td>
-                          <td className="px-5 py-4 text-sm text-slate-600">
-                            {eq.ubicacion ?? '—'}
                           </td>
                           <td className="px-5 py-4">
                             <EstadoBadge estado={eq.estado} />
