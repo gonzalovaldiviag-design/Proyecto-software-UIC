@@ -354,17 +354,6 @@ export default function ExternalizacionView({
 
           <button
             type="button"
-            onClick={handleExportCSV}
-            disabled={filteredItems.length === 0}
-            title={filteredItems.length === 0 ? 'No hay adquisiciones para exportar' : 'Exportar a CSV'}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 transition active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
-          >
-            <Download className="h-4 w-4 text-slate-500" />
-            <span>Exportar CSV</span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => setModalDirectaOpen(true)}
             className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 transition"
           >
