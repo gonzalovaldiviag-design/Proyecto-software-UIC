@@ -7,6 +7,7 @@ import {
   Clock,
   CheckCircle2,
   FileText,
+  FileCheck,
   ExternalLink,
   ChevronRight,
   Layers,
@@ -17,6 +18,7 @@ import {
   Copy,
   Check,
   X,
+  Download,
 } from 'lucide-react';
 import {
   type Equipo,
@@ -81,17 +83,14 @@ export default function ExternalizacionView({
   const stats = useMemo(() => {
     const total = items.length;
     const cotizacion = items.filter((i) => i.etapa_actual === 'Cotización / Evaluación Técnica').length;
-    const tramite = items.filter(
-      (i) =>
-        i.etapa_actual === 'Informe de Requerimiento Creado' ||
-        i.etapa_actual === 'Solicitud de Compra Asignada'
-    ).length;
+    const informeReq = items.filter((i) => i.etapa_actual === 'Informe de Requerimiento Creado').length;
+    const solicitudCompra = items.filter((i) => i.etapa_actual === 'Solicitud de Compra Asignada').length;
     const esperaOc = items.filter((i) => i.etapa_actual === 'En Espera de Orden de Compra').length;
     const finalizadas = items.filter((i) => i.etapa_actual === 'Finalizada / Recibida').length;
 
     const montoTotal = items.reduce((acc, curr) => acc + (curr.monto_estimado || 0), 0);
 
-    return { total, cotizacion, tramite, esperaOc, finalizadas, montoTotal };
+    return { total, cotizacion, informeReq, solicitudCompra, esperaOc, finalizadas, montoTotal };
   }, [items]);
 
   const filteredItems = useMemo(() => {
@@ -161,6 +160,117 @@ export default function ExternalizacionView({
       setItems((prev) => prev.filter((i) => i.id !== id));
       if (detailModalExt?.id === id) setDetailModalExt(null);
     }
+  };
+
+  const handleExportCSV = () => {
+    const hasFilterOrSearch =
+      (search || '').trim() !== '' || etapaFiltro !== 'todos' || origenFiltro !== 'todos';
+    const dataToExport = hasFilterOrSearch ? filteredItems : items;
+
+    if (dataToExport.length === 0) return;
+
+    const headers = [
+      'Código EXT',
+      'Origen',
+      'OT Mantenimiento',
+      'Tipo Adquisición',
+      'Descripción Requerimiento',
+      'Equipo Asociado',
+      'Ubicación',
+      'Marca',
+      'Modelo',
+      'Serie',
+      'Código Equipo',
+      'Solicitante',
+      'Etapa Actual',
+      'Monto Estimado (CLP)',
+      'Folio Informe Req',
+      'Fecha Informe Req',
+      'Folio Solicitud Compra',
+      'Fecha Solicitud Compra',
+      'N° Orden de Compra (OC)',
+      'Fecha OC',
+      'Fecha Recepción',
+      'Observaciones',
+      'Fecha Creación',
+    ];
+
+    const escapeCsv = (val: unknown): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val);
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const rows = dataToExport.map((item) => {
+      // Búsqueda del equipo asociado por ID o por identificación textual
+      let eq: Equipo | undefined;
+      if (item.equipo_id) {
+        eq = equipos.find((e) => e.id === item.equipo_id);
+      }
+      if (!eq && item.equipo_identificacion) {
+        const ident = item.equipo_identificacion.trim().toLowerCase();
+        eq = equipos.find((e) => {
+          const cod = e.codigo.toLowerCase();
+          const nom = e.nombre.toLowerCase();
+          return ident.startsWith(cod) || ident.includes(cod) || ident.includes(nom);
+        });
+      }
+
+      const equipoNombre = eq ? eq.nombre : (item.equipo_identificacion || 'Stock General / No aplica');
+      const ubicacion = eq?.ubicacion || '—';
+      const marca = eq?.marca || '—';
+      const modelo = eq?.modelo || '—';
+      const serie = eq?.serie || '—';
+      const codigoEq = eq?.codigo || '—';
+
+      const origenLabel =
+        item.origen === 'mantenimiento' ? 'Línea A: OT Mantenimiento' : 'Línea B: Solicitud Directa';
+      const otMnt = item.codigo_mantenimiento || '—';
+
+      return [
+        escapeCsv(item.codigo),
+        escapeCsv(origenLabel),
+        escapeCsv(otMnt),
+        escapeCsv(item.tipo),
+        escapeCsv(item.descripcion),
+        escapeCsv(equipoNombre),
+        escapeCsv(ubicacion),
+        escapeCsv(marca),
+        escapeCsv(modelo),
+        escapeCsv(serie),
+        escapeCsv(codigoEq),
+        escapeCsv(item.solicitante),
+        escapeCsv(item.etapa_actual),
+        escapeCsv(item.monto_estimado != null ? item.monto_estimado : ''),
+        escapeCsv(item.informe_req_folio || ''),
+        escapeCsv(item.fecha_informe_req || ''),
+        escapeCsv(item.solicitud_compra_folio || ''),
+        escapeCsv(item.fecha_solicitud_compra || ''),
+        escapeCsv(item.numero_oc || ''),
+        escapeCsv(item.fecha_oc || ''),
+        escapeCsv(item.fecha_recepcion || ''),
+        escapeCsv(item.notas || ''),
+        escapeCsv(item.created_at ? item.created_at.slice(0, 10) : ''),
+      ].join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const fileName = `externalizaciones_compras_${year}-${month}-${day}.csv`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const formatCurrency = (val?: number | null) => {
@@ -244,6 +354,17 @@ export default function ExternalizacionView({
 
           <button
             type="button"
+            onClick={handleExportCSV}
+            disabled={filteredItems.length === 0}
+            title={filteredItems.length === 0 ? 'No hay adquisiciones para exportar' : 'Exportar a CSV'}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 transition active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+          >
+            <Download className="h-4 w-4 text-slate-500" />
+            <span>Exportar CSV</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setModalDirectaOpen(true)}
             className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 transition"
           >
@@ -284,8 +405,16 @@ export default function ExternalizacionView({
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <button
+          type="button"
+          onClick={() => setEtapaFiltro('todos')}
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'todos'
+              ? 'border-blue-500 bg-blue-50/30 ring-2 ring-blue-500/20'
+              : 'border-slate-200 bg-white hover:border-slate-300'
+          }`}
+        >
           <div className="flex items-center justify-between text-slate-500">
             <span className="text-xs font-medium">Total Procesos</span>
             <Layers className="h-4 w-4 text-slate-400" />
@@ -294,43 +423,112 @@ export default function ExternalizacionView({
           <div className="mt-1 text-[11px] text-slate-400">
             Monto: {formatCurrency(stats.montoTotal)}
           </div>
-        </div>
+        </button>
 
-        <div className="rounded-2xl border border-amber-200/80 bg-amber-50/40 p-4 shadow-xs">
+        <button
+          type="button"
+          onClick={() =>
+            setEtapaFiltro(
+              etapaFiltro === 'Cotización / Evaluación Técnica' ? 'todos' : 'Cotización / Evaluación Técnica'
+            )
+          }
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'Cotización / Evaluación Técnica'
+              ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-500/20'
+              : 'border-amber-200/80 bg-amber-50/40 hover:bg-amber-50/70'
+          }`}
+        >
           <div className="flex items-center justify-between text-amber-700">
             <span className="text-xs font-medium">1. En Cotización</span>
             <Clock className="h-4 w-4 text-amber-500" />
           </div>
           <div className="mt-2 text-2xl font-bold text-amber-950">{stats.cotizacion}</div>
           <div className="mt-1 text-[11px] text-amber-700 font-medium">Evaluación Técnica</div>
-        </div>
+        </button>
 
-        <div className="rounded-2xl border border-blue-200/80 bg-blue-50/40 p-4 shadow-xs">
+        <button
+          type="button"
+          onClick={() =>
+            setEtapaFiltro(
+              etapaFiltro === 'Informe de Requerimiento Creado' ? 'todos' : 'Informe de Requerimiento Creado'
+            )
+          }
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'Informe de Requerimiento Creado'
+              ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20'
+              : 'border-blue-200/80 bg-blue-50/40 hover:bg-blue-50/70'
+          }`}
+        >
           <div className="flex items-center justify-between text-blue-700">
-            <span className="text-xs font-medium">2-3. En Trámite</span>
+            <span className="text-xs font-medium">2. Informe Req.</span>
             <FileText className="h-4 w-4 text-blue-500" />
           </div>
-          <div className="mt-2 text-2xl font-bold text-blue-950">{stats.tramite}</div>
-          <div className="mt-1 text-[11px] text-blue-700 font-medium">Informe Req / Solicitud</div>
-        </div>
+          <div className="mt-2 text-2xl font-bold text-blue-950">{stats.informeReq}</div>
+          <div className="mt-1 text-[11px] text-blue-700 font-medium">Informe Creado</div>
+        </button>
 
-        <div className="rounded-2xl border border-purple-200/80 bg-purple-50/40 p-4 shadow-xs">
+        <button
+          type="button"
+          onClick={() =>
+            setEtapaFiltro(
+              etapaFiltro === 'Solicitud de Compra Asignada' ? 'todos' : 'Solicitud de Compra Asignada'
+            )
+          }
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'Solicitud de Compra Asignada'
+              ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-500/20'
+              : 'border-indigo-200/80 bg-indigo-50/40 hover:bg-indigo-50/70'
+          }`}
+        >
+          <div className="flex items-center justify-between text-indigo-700">
+            <span className="text-xs font-medium">3. Solicitud Compra</span>
+            <FileCheck className="h-4 w-4 text-indigo-500" />
+          </div>
+          <div className="mt-2 text-2xl font-bold text-indigo-950">{stats.solicitudCompra}</div>
+          <div className="mt-1 text-[11px] text-indigo-700 font-medium">SC Asignada / Folio</div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            setEtapaFiltro(
+              etapaFiltro === 'En Espera de Orden de Compra' ? 'todos' : 'En Espera de Orden de Compra'
+            )
+          }
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'En Espera de Orden de Compra'
+              ? 'border-purple-500 bg-purple-50 ring-2 ring-purple-500/20'
+              : 'border-purple-200/80 bg-purple-50/40 hover:bg-purple-50/70'
+          }`}
+        >
           <div className="flex items-center justify-between text-purple-700">
             <span className="text-xs font-medium">4. Espera de OC</span>
             <Clock className="h-4 w-4 text-purple-500" />
           </div>
           <div className="mt-2 text-2xl font-bold text-purple-950">{stats.esperaOc}</div>
           <div className="mt-1 text-[11px] text-purple-700 font-medium">Mercado Público</div>
-        </div>
+        </button>
 
-        <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/40 p-4 shadow-xs col-span-2 lg:col-span-1">
+        <button
+          type="button"
+          onClick={() =>
+            setEtapaFiltro(
+              etapaFiltro === 'Finalizada / Recibida' ? 'todos' : 'Finalizada / Recibida'
+            )
+          }
+          className={`rounded-2xl border p-4 text-left shadow-xs transition cursor-pointer ${
+            etapaFiltro === 'Finalizada / Recibida'
+              ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-500/20'
+              : 'border-emerald-200/80 bg-emerald-50/40 hover:bg-emerald-50/70'
+          }`}
+        >
           <div className="flex items-center justify-between text-emerald-700">
-            <span className="text-xs font-medium">Finalizadas / Recibidas</span>
+            <span className="text-xs font-medium">5. Finalizadas</span>
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
           </div>
           <div className="mt-2 text-2xl font-bold text-emerald-950">{stats.finalizadas}</div>
           <div className="mt-1 text-[11px] text-emerald-700 font-medium">Con OC de Mercado Público</div>
-        </div>
+        </button>
       </div>
 
       {/* Main Table Card */}
@@ -375,6 +573,17 @@ export default function ExternalizacionView({
               <option value="mantenimiento">Línea A: OT Mantenimiento</option>
               <option value="directa">Línea B: Solicitud Directa</option>
             </select>
+
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              disabled={filteredItems.length === 0}
+              title={filteredItems.length === 0 ? 'No hay adquisiciones para exportar' : 'Exportar a CSV'}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none disabled:active:scale-100"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>Exportar a CSV</span>
+            </button>
           </div>
         </div>
 

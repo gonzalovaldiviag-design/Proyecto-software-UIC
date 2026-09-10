@@ -214,9 +214,40 @@ export async function findExternalizacionByMantenimiento(
 }
 
 /**
+ * Valida si los datos de la Solicitud de Compra (Etapa 3) son válidos:
+ * Requiere un N° de Folio no vacío, de longitud mínima y que no sea un placeholder genérico.
+ */
+export function isValidSolicitudCompraFolio(folio: string | null | undefined): boolean {
+  if (!folio) return false;
+  const clean = folio.trim();
+  if (clean.length < 3) return false;
+  if (/^[-._/0\s]+$/.test(clean)) return false;
+  const upper = clean.toUpperCase();
+  if (upper === 'N/A' || upper === 'NONE' || upper === 'PENDIENTE' || upper === 'SIN FOLIO' || upper === 'S/N') {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Valida si el número de Orden de Compra de Mercado Público (Etapa 4) es válido:
+ * Requiere un código con longitud mínima y que no sea un placeholder genérico.
+ */
+export function isValidNumeroOC(oc: string | null | undefined): boolean {
+  if (!oc) return false;
+  const clean = oc.trim().toUpperCase();
+  if (clean.length < 5) return false;
+  if (/^[-._/0\s]+$/.test(clean)) return false;
+  if (clean === 'N/A' || clean === 'NONE' || clean === 'PENDIENTE' || clean === 'SIN OC' || clean === 'S/N') {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Regla de Integridad de Cierre:
  * Un mantenimiento no puede marcarse como 'Completado' si tiene externalización
- * activa en etapas 1 a 4 (debe estar en 'Finalizada / Recibida').
+ * activa en etapas 1 a 4 (debe estar en 'Finalizada / Recibida' con OC válida).
  */
 export async function puedeCompletarMantenimiento(
   mantId?: string | null,
@@ -231,6 +262,14 @@ export async function puedeCompletarMantenimiento(
     return {
       puede: false,
       motivo: `Bloqueo de Integridad: Esta orden tiene una gestión de adquisición externa en curso (${ext.codigo}) en etapa "${ext.etapa_actual}". Debe completarse la Etapa 4 con el N° de Orden de Compra (OC) de Mercado Público en el módulo de Externalización antes de emitir el Informe Técnico y cerrar la orden.`,
+      externalizacion: ext,
+    };
+  }
+
+  if (!isValidNumeroOC(ext.numero_oc)) {
+    return {
+      puede: false,
+      motivo: `Bloqueo de Integridad: La adquisición externa (${ext.codigo}) no cuenta con un N° de Orden de Compra (OC) válido de Mercado Público. Debe completarse la Etapa 4 antes de emitir el Informe Técnico y cerrar la orden.`,
       externalizacion: ext,
     };
   }
@@ -393,36 +432,68 @@ export async function actualizarEtapaExternalizacion(
 
     let nuevaEtapa = data.etapa_actual || actual.etapa_actual;
 
-    const solFolio = (data.solicitud_compra_folio !== undefined ? data.solicitud_compra_folio : actual.solicitud_compra_folio)?.trim();
-    const oc = (data.numero_oc !== undefined ? data.numero_oc : actual.numero_oc)?.trim();
+    const solFolio = data.solicitud_compra_folio !== undefined ? data.solicitud_compra_folio : actual.solicitud_compra_folio;
+    const oc = data.numero_oc !== undefined ? data.numero_oc : actual.numero_oc;
+
+    const hasValidSolCompra = isValidSolicitudCompraFolio(solFolio);
+    const hasValidOC = isValidNumeroOC(oc);
 
     if (avanzarEtapa) {
-      if (nuevaEtapa === 'Solicitud de Compra Asignada') {
-        if (!solFolio) {
+      if (nuevaEtapa === 'Cotización / Evaluación Técnica') {
+        nuevaEtapa = 'Informe de Requerimiento Creado';
+      } else if (nuevaEtapa === 'Informe de Requerimiento Creado') {
+        nuevaEtapa = 'Solicitud de Compra Asignada';
+      } else if (nuevaEtapa === 'Solicitud de Compra Asignada') {
+        if (!hasValidSolCompra) {
           return {
             success: false,
-            error: 'Para completar la Etapa 3 y avanzar en el ciclo, debes ingresar los datos de la Solicitud de Compra Tramitada (N° de Folio).',
+            error: 'Para completar la Etapa 3 y avanzar en el ciclo, debes ingresar un N° de Folio válido para la Solicitud de Compra Tramitada (mínimo 3 caracteres no vacíos).',
           };
         }
         nuevaEtapa = 'En Espera de Orden de Compra';
       } else if (nuevaEtapa === 'En Espera de Orden de Compra') {
-        if (!oc) {
+        if (!hasValidOC) {
           return {
             success: false,
-            error: 'Para completar la Etapa 4 y finalizar la adquisición, debes ingresar el N° de Orden de Compra de Mercado Público.',
+            error: 'Para completar la Etapa 4 y finalizar la adquisición, debes ingresar un N° de Orden de Compra (OC) válido de Mercado Público.',
           };
         }
         nuevaEtapa = 'Finalizada / Recibida';
+      } else if (nuevaEtapa === 'Finalizada / Recibida') {
+        if (!hasValidOC) {
+          return {
+            success: false,
+            error: 'Para mantener la adquisición como Finalizada / Recibida, se requiere el N° de Orden de Compra de Mercado Público.',
+          };
+        }
       } else {
         const idx = ETAPAS_ORDEN.indexOf(nuevaEtapa);
         if (idx >= 0 && idx < ETAPAS_ORDEN.length - 1) {
           nuevaEtapa = ETAPAS_ORDEN[idx + 1];
         }
       }
+    } else if (data.etapa_actual && data.etapa_actual !== actual.etapa_actual) {
+      // Cambio manual de etapa: validaciones de prerrequisito
+      if (
+        (data.etapa_actual === 'En Espera de Orden de Compra' || data.etapa_actual === 'Finalizada / Recibida') &&
+        !hasValidSolCompra
+      ) {
+        return {
+          success: false,
+          error: 'No se puede situar la adquisición en esta etapa: La Etapa 3 debe completarse con un N° de Folio válido de Solicitud de Compra.',
+        };
+      }
+
+      if (data.etapa_actual === 'Finalizada / Recibida' && !hasValidOC) {
+        return {
+          success: false,
+          error: 'No se puede situar en "Finalizada / Recibida": La Etapa 4 requiere registrar el N° de Orden de Compra de Mercado Público.',
+        };
+      }
     }
 
-    // Validación de integridad del ciclo: Etapa 4 requiere OC para pasar a Finalizada / Recibida
-    if (nuevaEtapa === 'Finalizada / Recibida' && !oc) {
+    // Validación de integridad del ciclo: Etapa 4 requiere OC para pasar o mantenerse en Finalizada / Recibida
+    if (nuevaEtapa === 'Finalizada / Recibida' && !hasValidOC) {
       return {
         success: false,
         error: 'Para completar la Etapa 4 y marcar como Finalizada / Recibida, debes ingresar el N° de Orden de Compra de Mercado Público.',

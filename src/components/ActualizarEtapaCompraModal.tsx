@@ -5,6 +5,7 @@ import {
   FileText,
   CheckCircle2,
   AlertTriangle,
+  AlertCircle,
   ArrowRight,
   DollarSign,
   FileCheck,
@@ -25,6 +26,8 @@ import {
   ETAPAS_ORDEN,
   getEtapaIndex,
   actualizarEtapaExternalizacion,
+  isValidSolicitudCompraFolio,
+  isValidNumeroOC,
 } from '@/lib/externalizacionStorage';
 import { processDocumentFile } from '@/lib/fileUtils';
 
@@ -46,6 +49,7 @@ export default function ActualizarEtapaCompraModal({
 }: ActualizarEtapaCompraModalProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ folio?: string; oc?: string }>({});
   const [uploadingType, setUploadingType] = useState<'cotizacion' | 'informe' | 'oc' | null>(null);
   const [uploadSuccessMessage, setUploadSuccessMessage] = useState<string | null>(null);
 
@@ -84,9 +88,10 @@ export default function ActualizarEtapaCompraModal({
   useEffect(() => {
     if (externalizacion) {
       setError(null);
+      setFieldErrors({});
 
-      const hasOc = Boolean(externalizacion.numero_oc?.trim());
-      // Si el registro figura como Finalizada pero no tiene OC, lo posicionamos en Etapa 4 para ingresar la OC
+      const hasOc = isValidNumeroOC(externalizacion.numero_oc);
+      // Si el registro figura como Finalizada pero no tiene OC válida, lo posicionamos en Etapa 4 para ingresar la OC
       if (externalizacion.etapa_actual === 'Finalizada / Recibida' && !hasOc) {
         setEtapaSeleccionada('En Espera de Orden de Compra');
       } else {
@@ -129,8 +134,8 @@ export default function ActualizarEtapaCompraModal({
     (cotizacionUrl || '').trim() ||
     (cotizacionNombre || '').trim() ||
     fechaCotizacion ||
-    (solicitudCompraFolio || '').trim() ||
-    (numeroOc || '').trim()
+    isValidSolicitudCompraFolio(solicitudCompraFolio) ||
+    isValidNumeroOC(numeroOc)
   );
 
   // Etapa 2: Informe de Requerimiento Creado
@@ -138,15 +143,15 @@ export default function ActualizarEtapaCompraModal({
     (informeReqFolio || '').trim() ||
     (informeReqUrl || '').trim() ||
     (informeReqNombre || '').trim() ||
-    (solicitudCompraFolio || '').trim() ||
-    (numeroOc || '').trim()
+    isValidSolicitudCompraFolio(solicitudCompraFolio) ||
+    isValidNumeroOC(numeroOc)
   );
 
-  // Etapa 3: "la etapa 3 se completa cuando se rellenan los datos de la etapa 3 solicitud de compra tramitada"
-  const isEtapa3Completa = Boolean((solicitudCompraFolio || '').trim());
+  // Etapa 3: "la etapa 3 se completa cuando se rellenan datos válidos de solicitud de compra tramitada"
+  const isEtapa3Completa = isValidSolicitudCompraFolio(solicitudCompraFolio);
 
-  // Etapa 4: "Etapa 4 se completa cuando se rellena los datos en la etapa 4 orden de compra de mercado publico"
-  const isEtapa4Completa = Boolean((numeroOc || '').trim());
+  // Etapa 4: "Etapa 4 se completa cuando se rellena el número de orden de compra de mercado público"
+  const isEtapa4Completa = isValidNumeroOC(numeroOc);
 
   // Etapa 5: Finalizada / Recibida
   const isEtapa5Completa = etapaSeleccionada === 'Finalizada / Recibida' && isEtapa4Completa;
@@ -243,9 +248,31 @@ export default function ActualizarEtapaCompraModal({
     }
   }
 
+  function handleSelectStage(targetEtapa: EtapaExternalizacion) {
+    const targetIdx = getEtapaIndex(targetEtapa);
+    if (targetIdx >= 3 && !isEtapa3Completa) {
+      setError(
+        'Validación de Flujo: Para acceder a la Etapa 4 o Etapa 5, primero debes completar la Etapa 3 ingresando un N° de Folio válido de Solicitud de Compra (mínimo 3 caracteres no vacíos).'
+      );
+      setFieldErrors({ folio: 'Ingresa el Folio de Solicitud de Compra para habilitar etapas posteriores' });
+      return;
+    }
+    if (targetIdx >= 4 && !isEtapa4Completa) {
+      setError(
+        'Validación de Flujo: Para situar la adquisición en la Etapa 5 (Finalizada), primero debes completar la Etapa 4 ingresando el N° de Orden de Compra de Mercado Público (mínimo 5 caracteres).'
+      );
+      setFieldErrors({ oc: 'Ingresa el N° de OC de Mercado Público para habilitar la etapa Finalizada' });
+      return;
+    }
+    setError(null);
+    setFieldErrors({});
+    setEtapaSeleccionada(targetEtapa);
+  }
+
   async function handleSubmit(avanzar: boolean) {
     if (!externalizacion) return;
     setError(null);
+    setFieldErrors({});
 
     let targetEtapa = etapaSeleccionada;
     if (avanzar) {
@@ -254,35 +281,50 @@ export default function ActualizarEtapaCompraModal({
       } else if (etapaSeleccionada === 'Informe de Requerimiento Creado') {
         targetEtapa = 'Solicitud de Compra Asignada';
       } else if (etapaSeleccionada === 'Solicitud de Compra Asignada') {
-        if (!solicitudCompraFolio.trim()) {
-          setError('Para completar la Etapa 3 y avanzar en el ciclo, debes ingresar el N° de Folio de la Solicitud de Compra Tramitada.');
+        if (!isEtapa3Completa) {
+          setError(
+            'Validación de Etapa 3: Para completar esta etapa y avanzar a "En Espera de Orden de Compra", es obligatorio ingresar un N° de Folio válido para la Solicitud de Compra Tramitada (mínimo 3 caracteres no vacíos).'
+          );
+          setFieldErrors({ folio: 'Ingresa un Folio válido para completar la Etapa 3' });
           return;
         }
         targetEtapa = 'En Espera de Orden de Compra';
       } else if (etapaSeleccionada === 'En Espera de Orden de Compra') {
-        if (!numeroOc.trim()) {
-          setError('Para completar la Etapa 4 y finalizar la adquisición, debes ingresar el N° de Orden de Compra de Mercado Público.');
+        if (!isEtapa4Completa) {
+          setError(
+            'Validación de Etapa 4: Para completar esta etapa y finalizar la adquisición, es obligatorio ingresar el N° de Orden de Compra (OC) válido de Mercado Público (ej: 2398-105-CM26).'
+          );
+          setFieldErrors({ oc: 'Ingresa un N° de OC válido para completar la Etapa 4' });
           return;
         }
         targetEtapa = 'Finalizada / Recibida';
       } else if (etapaSeleccionada === 'Finalizada / Recibida') {
-        if (!numeroOc.trim()) {
-          setError('Para completar la Etapa 4 y cerrar la adquisición, debes ingresar el N° de Orden de Compra de Mercado Público.');
+        if (!isEtapa4Completa) {
+          setError(
+            'Validación: No se puede finalizar la adquisición sin haber registrado el N° de Orden de Compra de Mercado Público en la Etapa 4.'
+          );
+          setFieldErrors({ oc: 'Requerido para finalizar la adquisición' });
           return;
         }
         targetEtapa = 'Finalizada / Recibida';
       }
     } else {
       // Guardar cambios manuales en la etapa seleccionada
-      if (targetEtapa === 'Finalizada / Recibida' && !numeroOc.trim()) {
-        setError('No se puede guardar como "Finalizada / Recibida": la Etapa 4 requiere registrar el N° de Orden de Compra de Mercado Público.');
-        return;
-      }
       if (
         (targetEtapa === 'En Espera de Orden de Compra' || targetEtapa === 'Finalizada / Recibida') &&
-        !solicitudCompraFolio.trim()
+        !isEtapa3Completa
       ) {
-        setError('Para avanzar a las etapas posteriores, debes completar primero la Etapa 3 ingresando el N° de Folio de la Solicitud de Compra.');
+        setError(
+          'Validación de Requisitos: Para situar la adquisición en esta etapa, primero debes completar la Etapa 3 ingresando un N° de Folio válido de Solicitud de Compra.'
+        );
+        setFieldErrors({ folio: 'Folio requerido para situar en esta etapa' });
+        return;
+      }
+      if (targetEtapa === 'Finalizada / Recibida' && !isEtapa4Completa) {
+        setError(
+          'Validación de Requisitos: No se puede guardar como "Finalizada / Recibida" porque la Etapa 4 no está completada. Debes registrar el N° de Orden de Compra de Mercado Público.'
+        );
+        setFieldErrors({ oc: 'N° de OC requerido para marcar como Finalizada' });
         return;
       }
     }
@@ -400,18 +442,7 @@ export default function ActualizarEtapaCompraModal({
                 <button
                   type="button"
                   key={etapa}
-                  onClick={() => {
-                    if (idx === 4 && !isEtapa4Completa) {
-                      setError('Para pasar a la Etapa 5 (Finalizada), primero debes completar la Etapa 4 registrando el N° de Orden de Compra de Mercado Público.');
-                      return;
-                    }
-                    if (idx >= 3 && !isEtapa3Completa) {
-                      setError('Para avanzar a esta etapa, primero debes completar la Etapa 3 ingresando el N° de Folio de la Solicitud de Compra.');
-                      return;
-                    }
-                    setError(null);
-                    setEtapaSeleccionada(etapa);
-                  }}
+                  onClick={() => handleSelectStage(etapa)}
                   className={`relative flex flex-col rounded-xl border p-2 text-left transition-all cursor-pointer ${
                     isCurrent
                       ? isCompleted
@@ -471,22 +502,7 @@ export default function ActualizarEtapaCompraModal({
             </div>
             <select
               value={etapaSeleccionada}
-              onChange={(e) => {
-                const target = e.target.value as EtapaExternalizacion;
-                if (target === 'Finalizada / Recibida' && !isEtapa4Completa) {
-                  setError('Para pasar a "Finalizada / Recibida", la Etapa 4 debe completarse registrando el N° de Orden de Compra.');
-                  return;
-                }
-                if (
-                  (target === 'En Espera de Orden de Compra' || target === 'Finalizada / Recibida') &&
-                  !isEtapa3Completa
-                ) {
-                  setError('Para avanzar en el ciclo, primero debes completar la Etapa 3 ingresando el N° de Folio de la Solicitud de Compra.');
-                  return;
-                }
-                setError(null);
-                setEtapaSeleccionada(target);
-              }}
+              onChange={(e) => handleSelectStage(e.target.value as EtapaExternalizacion)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             >
               {ETAPAS_ORDEN.map((etapa, idx) => {
@@ -860,18 +876,34 @@ export default function ActualizarEtapaCompraModal({
                   N° de Solicitud de Compra (Folio) <span className="text-rose-500 font-bold">*</span>
                 </label>
                 <input
-                  className={`${inputClass} ${isEtapa3Completa ? 'border-emerald-300 font-semibold' : ''}`}
+                  className={`${inputClass} ${
+                    fieldErrors.folio
+                      ? 'border-rose-400 bg-rose-50/20 ring-2 ring-rose-500/20'
+                      : isEtapa3Completa
+                        ? 'border-emerald-300 font-semibold'
+                        : ''
+                  }`}
                   placeholder="Ej: SC-2026-0881 o 4568"
                   value={solicitudCompraFolio}
-                  onChange={(e) => setSolicitudCompraFolio(e.target.value)}
+                  onChange={(e) => {
+                    setSolicitudCompraFolio(e.target.value);
+                    if (fieldErrors.folio) setFieldErrors((prev) => ({ ...prev, folio: undefined }));
+                  }}
                 />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  {isEtapa3Completa ? (
-                    <span className="text-emerald-700 font-medium">✓ Folio ingresado. La Etapa 3 está completada y permite el avance.</span>
-                  ) : (
-                    <span>Al rellenar el N° de Solicitud de Compra se completa la Etapa 3.</span>
-                  )}
-                </p>
+                {fieldErrors.folio ? (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-rose-600">
+                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span>{fieldErrors.folio}</span>
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {isEtapa3Completa ? (
+                      <span className="text-emerald-700 font-medium">✓ Folio validado. La Etapa 3 está completada y permite el avance.</span>
+                    ) : (
+                      <span>Al rellenar el N° de Solicitud de Compra (mínimo 3 caracteres) se completa la Etapa 3.</span>
+                    )}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -948,19 +980,33 @@ export default function ActualizarEtapaCompraModal({
                 </label>
                 <input
                   className={`${inputClass} font-mono font-semibold uppercase ${
-                    isEtapa4Completa ? 'text-emerald-800 border-emerald-300' : 'text-blue-700'
+                    fieldErrors.oc
+                      ? 'border-rose-400 bg-rose-50/20 ring-2 ring-rose-500/20 text-rose-800'
+                      : isEtapa4Completa
+                        ? 'text-emerald-800 border-emerald-300'
+                        : 'text-blue-700'
                   }`}
                   placeholder="Ej: 2398-105-CM26"
                   value={numeroOc}
-                  onChange={(e) => setNumeroOc(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    setNumeroOc(e.target.value.toUpperCase());
+                    if (fieldErrors.oc) setFieldErrors((prev) => ({ ...prev, oc: undefined }));
+                  }}
                 />
-                <p className="mt-1 text-[11px] text-slate-500">
-                  {isEtapa4Completa ? (
-                    <span className="text-emerald-700 font-medium">✓ N° de OC validado. La Etapa 4 está completada.</span>
-                  ) : (
-                    <span>Al rellenar el N° de OC se completa la Etapa 4 y se habilita la finalización.</span>
-                  )}
-                </p>
+                {fieldErrors.oc ? (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-rose-600">
+                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span>{fieldErrors.oc}</span>
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {isEtapa4Completa ? (
+                      <span className="text-emerald-700 font-medium">✓ N° de OC validado. La Etapa 4 está completada.</span>
+                    ) : (
+                      <span>Al rellenar el N° de OC de Mercado Público se completa la Etapa 4 y se habilita la finalización.</span>
+                    )}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1089,7 +1135,20 @@ export default function ActualizarEtapaCompraModal({
             Cancelar
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {currentStageIndex === 2 && !isEtapa3Completa && (
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                <span>N° Folio SC requerido para completar Etapa 3</span>
+              </span>
+            )}
+            {currentStageIndex === 3 && !isEtapa4Completa && (
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                <span>N° OC Mercado Público requerido para completar Etapa 4</span>
+              </span>
+            )}
+
             <button
               type="button"
               disabled={saving}
