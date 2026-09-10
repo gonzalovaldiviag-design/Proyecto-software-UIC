@@ -72,9 +72,9 @@ export default function InformeMantenimientoModal({
       };
     }
 
-    const partes = (mantenimiento.equipo_identificacion || '').split('—');
-    const codigo = partes[0]?.trim() || '—';
-    const nombre = partes[1]?.trim() || mantenimiento.equipo_identificacion || '—';
+    const partes = (mantenimiento?.equipo_identificacion || '').split('—');
+    const codigo = (partes[0] || '').trim() || '—';
+    const nombre = (partes[1] || '').trim() || mantenimiento?.equipo_identificacion || '—';
 
     return {
       codigo,

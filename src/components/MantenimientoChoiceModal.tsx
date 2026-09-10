@@ -73,12 +73,12 @@ export default function MantenimientoChoiceModal({
 
   async function handleGuardarFalla() {
     setTouched(true);
-    if (!mantSeleccionado || !nuevaFalla.trim() || !registradoPor.trim()) return;
+    if (!mantSeleccionado || !(nuevaFalla || '').trim() || !(registradoPor || '').trim()) return;
     const mant = mantenimientos.find((m) => m.id === mantSeleccionado);
     if (!mant) return;
     setSaving(true);
     setError(null);
-    const textoActualizado = `${mant.problema_reportado}\n\n--- Nueva falla agregada por ${registradoPor.trim()} el ${new Date().toLocaleDateString('es-ES')} ---\n${nuevaFalla.trim()}`;
+    const textoActualizado = `${mant.problema_reportado}\n\n--- Nueva falla agregada por ${(registradoPor || '').trim()} el ${new Date().toLocaleDateString('es-ES')} ---\n${(nuevaFalla || '').trim()}`;
     const { error: updateError } = await supabase
       .from('mantenimientos')
       .update({ problema_reportado: textoActualizado })
@@ -92,8 +92,8 @@ export default function MantenimientoChoiceModal({
       .from('fallas_mantenimiento')
       .insert({
         mantenimiento_id: mant.id,
-        descripcion_falla: nuevaFalla.trim(),
-        registrado_por: registradoPor.trim(),
+        descripcion_falla: (nuevaFalla || '').trim(),
+        registrado_por: (registradoPor || '').trim(),
       });
     if (insertError) {
       setError(insertError.message);
@@ -254,7 +254,7 @@ export default function MantenimientoChoiceModal({
                       onChange={(e) => setNuevaFalla(e.target.value)}
                       placeholder="Describe la nueva falla a agregar al mantenimiento..."
                     />
-                    {touched && !nuevaFalla.trim() && (
+                    {touched && !(nuevaFalla || '').trim() && (
                       <p className="mt-1 text-xs text-rose-500">
                         La descripción de la falla es obligatoria
                       </p>
@@ -275,7 +275,7 @@ export default function MantenimientoChoiceModal({
                         placeholder="Nombre de quien registra la falla"
                       />
                     </div>
-                    {touched && !registradoPor.trim() && (
+                    {touched && !(registradoPor || '').trim() && (
                       <p className="mt-1 text-xs text-rose-500">
                         El nombre de quien registra es obligatorio
                       </p>

@@ -62,7 +62,7 @@ function InfoRow({
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium text-slate-400">{label}</p>
         <p className="mt-0.5 truncate text-sm font-medium text-slate-800">
-          {value && value.trim() !== '' ? value : '—'}
+          {value && typeof value === 'string' && value.trim() !== '' ? value : '—'}
         </p>
       </div>
     </div>

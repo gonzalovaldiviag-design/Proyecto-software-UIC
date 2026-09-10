@@ -74,6 +74,61 @@ export interface FallaMantenimiento {
   fecha_registro: string;
 }
 
+export type TipoExternalizacion =
+  | 'Compra de repuesto por fondo fijo'
+  | 'Compra de repuesto por Informe de requerimiento'
+  | 'Compra de servicio de mantenimiento o reparación externa';
+
+export type EtapaExternalizacion =
+  | 'Cotización / Evaluación Técnica'
+  | 'Informe de Requerimiento Creado'
+  | 'Solicitud de Compra Asignada'
+  | 'En Espera de Orden de Compra'
+  | 'Finalizada / Recibida';
+
+export interface Externalizacion {
+  id: string;
+  codigo: string;
+  origen: 'mantenimiento' | 'directa';
+  codigo_mantenimiento?: string | null;
+  mantenimiento_id?: string | null;
+  tipo: TipoExternalizacion;
+  descripcion: string;
+  equipo_identificacion?: string | null;
+  equipo_id?: string | null;
+  solicitante: string;
+  etapa_actual: EtapaExternalizacion;
+
+  // Etapa 1: Cotización / Evaluación Técnica
+  cotizacion_url?: string | null;
+  cotizacion_nombre?: string | null;
+  monto_estimado?: number | null;
+  fecha_cotizacion?: string | null;
+
+  // Etapa 2: Informe de Requerimiento Creado
+  informe_req_url?: string | null;
+  informe_req_nombre?: string | null;
+  informe_req_folio?: string | null;
+  fecha_informe_req?: string | null;
+
+  // Etapa 3: Solicitud de Compra Asignada
+  solicitud_compra_folio?: string | null;
+  solicitud_compra_url?: string | null;
+  fecha_solicitud_compra?: string | null;
+
+  // Etapa 4: En Espera de Orden de Compra
+  numero_oc?: string | null;
+  oc_url?: string | null;
+  oc_nombre?: string | null;
+  fecha_oc?: string | null;
+  fecha_recepcion?: string | null;
+
+  // Observaciones
+  notas?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const INITIAL_EQUIPOS: Equipo[] = [
   {
     id: '11111111-1111-4111-8111-111111111101',
@@ -328,6 +383,110 @@ const INITIAL_MANTENIMIENTOS: Mantenimiento[] = [
   },
 ];
 
+export const INITIAL_EXTERNALIZACIONES: Externalizacion[] = [
+  {
+    id: '33333333-3333-4333-8333-333333333301',
+    codigo: 'EXT-001',
+    origen: 'mantenimiento',
+    codigo_mantenimiento: 'MANT-001',
+    mantenimiento_id: '22222222-2222-4222-8222-222222222201',
+    tipo: 'Compra de repuesto por Informe de requerimiento',
+    descripcion: 'Adquisición de kit de calibración de flujo y módulo sensor de presión espiratoria para ventilador mecánico Dräger Evita V500.',
+    equipo_identificacion: 'EQ-002 — Respirador Mecánico',
+    equipo_id: '11111111-1111-4111-8111-111111111102',
+    solicitante: 'Dra. María González',
+    etapa_actual: 'Cotización / Evaluación Técnica',
+    cotizacion_url: 'https://example.com/docs/cotizacion_drager_9921.pdf',
+    cotizacion_nombre: 'Cotizacion_Drager_V500_Repuestos.pdf',
+    monto_estimado: 1450000,
+    fecha_cotizacion: '2026-09-03',
+    notas: 'Cotización emitida por representante oficial Dräger Medical Chile.',
+    created_at: '2026-09-02T11:00:00.000Z',
+    updated_at: '2026-09-03T16:00:00.000Z',
+  },
+  {
+    id: '33333333-3333-4333-8333-333333333302',
+    codigo: 'EXT-002',
+    origen: 'mantenimiento',
+    codigo_mantenimiento: 'MANT-002',
+    mantenimiento_id: '22222222-2222-4222-8222-222222222202',
+    tipo: 'Compra de servicio de mantenimiento o reparación externa',
+    descripcion: 'Reparación de cable coaxial y conector de transductor lineal L12-4 para ecógrafo portátil.',
+    equipo_identificacion: 'EQ-006 — Ecógrafo Portátil',
+    equipo_id: '11111111-1111-4111-8111-111111111106',
+    solicitante: 'Dr. Roberto Soto',
+    etapa_actual: 'Informe de Requerimiento Creado',
+    cotizacion_url: 'https://example.com/docs/cotizacion_sonosite_repair.pdf',
+    cotizacion_nombre: 'Cotizacion_Servicio_Tecnico_Transductor.pdf',
+    monto_estimado: 890000,
+    fecha_cotizacion: '2026-09-06',
+    informe_req_url: 'https://example.com/docs/req_2026_0941.pdf',
+    informe_req_nombre: 'Informe_Requerimiento_REQ-2026-0941.pdf',
+    informe_req_folio: 'REQ-2026-0941',
+    fecha_informe_req: '2026-09-07',
+    notas: 'Informe visado por Jefatura de Imagenología y Dirección Médica.',
+    created_at: '2026-09-05T15:00:00.000Z',
+    updated_at: '2026-09-07T10:30:00.000Z',
+  },
+  {
+    id: '33333333-3333-4333-8333-333333333303',
+    codigo: 'EXT-003',
+    origen: 'directa',
+    codigo_mantenimiento: null,
+    mantenimiento_id: null,
+    tipo: 'Compra de repuesto por fondo fijo',
+    descripcion: 'Reposición urgente de 10 paquetes de cables troncales ECG y 20 mangueras de PNI adulto para stock clínico de emergencia.',
+    equipo_identificacion: 'Stock Insumos Críticos — Pabellón Quirúrgico y UCI',
+    equipo_id: null,
+    solicitante: 'Enf. Patricia Morales',
+    etapa_actual: 'En Espera de Orden de Compra',
+    cotizacion_url: 'https://example.com/docs/cotizacion_cables_pni.pdf',
+    cotizacion_nombre: 'Cotizacion_MedSup_CablesTroncales.pdf',
+    monto_estimado: 380000,
+    fecha_cotizacion: '2026-08-25',
+    informe_req_url: null,
+    informe_req_folio: 'REQ-FF-2026-018',
+    informe_req_nombre: 'Memorandum_FondoFijo_018.pdf',
+    fecha_informe_req: '2026-08-26',
+    solicitud_compra_folio: 'SC-2026-0881',
+    solicitud_compra_url: 'https://doc.hospital.cl/sc/SC-2026-0881',
+    fecha_solicitud_compra: '2026-08-28',
+    notas: 'Aprobado por Subdirección Administrativa con cargo a Fondo Fijo de Equipamiento.',
+    created_at: '2026-08-25T08:30:00.000Z',
+    updated_at: '2026-08-28T14:00:00.000Z',
+  },
+  {
+    id: '33333333-3333-4333-8333-333333333304',
+    codigo: 'EXT-004',
+    origen: 'mantenimiento',
+    codigo_mantenimiento: 'MANT-003',
+    mantenimiento_id: '22222222-2222-4222-8222-222222222203',
+    tipo: 'Compra de repuesto por fondo fijo',
+    descripcion: 'Brazalete adulto NIBP nuevo (Ref: M1574A) adquirido por reposición directa.',
+    equipo_identificacion: 'EQ-001 — Monitor de Signos Vitales',
+    equipo_id: '11111111-1111-4111-8111-111111111101',
+    solicitante: 'Enf. Patricia Morales',
+    etapa_actual: 'Finalizada / Recibida',
+    cotizacion_url: 'https://example.com/docs/cotiz_brazalete.pdf',
+    cotizacion_nombre: 'Cotiz_Brazalete_Philips.pdf',
+    monto_estimado: 85000,
+    fecha_cotizacion: '2026-08-18',
+    informe_req_folio: 'REQ-2026-0772',
+    informe_req_nombre: 'Req_Brazalete_0772.pdf',
+    fecha_informe_req: '2026-08-19',
+    solicitud_compra_folio: 'SC-2026-0715',
+    fecha_solicitud_compra: '2026-08-19',
+    numero_oc: '2398-105-CM26',
+    oc_url: 'https://mercadopublico.cl/oc/2398-105-CM26',
+    oc_nombre: 'OC_MercadoPublico_2398-105-CM26.pdf',
+    fecha_oc: '2026-08-20',
+    fecha_recepcion: '2026-08-21',
+    notas: 'Repuesto recibido conforme en bodega técnica e instalado satisfactoriamente.',
+    created_at: '2026-08-18T09:00:00.000Z',
+    updated_at: '2026-08-21T16:00:00.000Z',
+  },
+];
+
 type QueryFilter = (row: Record<string, unknown>) => boolean;
 type SortComparator = (a: Record<string, unknown>, b: Record<string, unknown>) => number;
 
@@ -355,6 +514,7 @@ function createMockClient() {
   let equipos: Equipo[] = getStored<Equipo[]>('equipos', INITIAL_EQUIPOS);
   let mantenimientos: Mantenimiento[] = getStored<Mantenimiento[]>('mantenimientos', INITIAL_MANTENIMIENTOS);
   let fallas: FallaMantenimiento[] = getStored<FallaMantenimiento[]>('fallas', []);
+  let externalizaciones: Externalizacion[] = getStored<Externalizacion[]>('externalizaciones', INITIAL_EXTERNALIZACIONES);
   const storageFiles = new Map<string, string>();
 
   function generateUuid(): string {
@@ -375,6 +535,15 @@ function createMockClient() {
       if (match) maxNum = Math.max(maxNum, parseInt(match[1], 10));
     }
     return `MANT-${String(maxNum + 1).padStart(3, '0')}`;
+  }
+
+  function getNextExtCode(): string {
+    let maxNum = 0;
+    for (const ext of externalizaciones) {
+      const match = ext.codigo?.match(/(\d+)\s*$/);
+      if (match) maxNum = Math.max(maxNum, parseInt(match[1], 10));
+    }
+    return `EXT-${String(maxNum + 1).padStart(3, '0')}`;
   }
 
   return {
@@ -415,6 +584,7 @@ function createMockClient() {
                 if (tableName === 'equipos') dataset = [...(equipos as unknown as Record<string, unknown>[])];
                 else if (tableName === 'mantenimientos') dataset = [...(mantenimientos as unknown as Record<string, unknown>[])];
                 else if (tableName === 'fallas_mantenimiento') dataset = [...(fallas as unknown as Record<string, unknown>[])];
+                else if (tableName === 'externalizaciones') dataset = [...(externalizaciones as unknown as Record<string, unknown>[])];
 
                 for (const filter of filters) {
                   dataset = dataset.filter(filter);
@@ -448,6 +618,8 @@ function createMockClient() {
 
             if (tableName === 'mantenimientos' && !newItem.codigo) {
               newItem.codigo = getNextMantCode();
+            } else if (tableName === 'externalizaciones' && !newItem.codigo) {
+              newItem.codigo = getNextExtCode();
             }
 
             if (tableName === 'equipos') {
@@ -459,6 +631,9 @@ function createMockClient() {
             } else if (tableName === 'fallas_mantenimiento') {
               fallas = [newItem as unknown as FallaMantenimiento, ...fallas];
               setStored('fallas', fallas);
+            } else if (tableName === 'externalizaciones') {
+              externalizaciones = [newItem as unknown as Externalizacion, ...externalizaciones];
+              setStored('externalizaciones', externalizaciones);
             }
             created.push(newItem);
           }
@@ -484,6 +659,13 @@ function createMockClient() {
                       : m
                   );
                   setStored('mantenimientos', mantenimientos);
+                } else if (tableName === 'externalizaciones') {
+                  externalizaciones = externalizaciones.map((ext) =>
+                    (ext as unknown as Record<string, unknown>)[column] === value
+                      ? ({ ...ext, ...updates, updated_at: new Date().toISOString() } as unknown as Externalizacion)
+                      : ext
+                  );
+                  setStored('externalizaciones', externalizaciones);
                 }
                 return { data: null, error: null };
               })();
@@ -510,6 +692,11 @@ function createMockClient() {
                     (f) => (f as unknown as Record<string, unknown>)[column] !== value
                   );
                   setStored('fallas', fallas);
+                } else if (tableName === 'externalizaciones') {
+                  externalizaciones = externalizaciones.filter(
+                    (ext) => (ext as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('externalizaciones', externalizaciones);
                 }
                 return { data: null, error: null };
               })();

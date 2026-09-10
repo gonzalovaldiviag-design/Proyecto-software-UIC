@@ -12,10 +12,8 @@ import {
   UserCheck,
   ClipboardList,
   Flag,
-  Pencil,
   Download,
   FileText,
-  RotateCcw,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
 import { enrichMantenimiento, saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
@@ -123,7 +121,7 @@ export default function MantenimientosView({
   }, []);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = (search || '').trim().toLowerCase();
     return mantenimientos.filter((m) => {
       const matchSearch =
         q === '' ||
@@ -194,13 +192,14 @@ export default function MantenimientosView({
   }
 
   async function handleSave(data: MantenimientoFormData) {
-    if (data.estado_mantenimiento === 'En proceso' && (!data.asignado_a || !data.asignado_a.trim())) {
+    const asignado = (data.asignado_a || '').trim();
+    if (data.estado_mantenimiento === 'En proceso' && !asignado) {
       setError('Para el estado "En proceso" es obligatorio completar el campo "Asignado a (Técnico / Responsable)"');
       return;
     }
 
     const estadoFinal =
-      data.estado_mantenimiento || (data.asignado_a ? 'En proceso' : 'Pendiente de Asignación');
+      data.estado_mantenimiento || (asignado ? 'En proceso' : 'Pendiente de Asignación');
 
     const payload = {
       equipo_id: data.equipo_id,
@@ -325,7 +324,7 @@ export default function MantenimientosView({
   }
 
   function handleExportCSV() {
-    const tieneFiltros = search.trim() !== '' || filtrosEstado.length > 0 || filtroVencidos;
+    const tieneFiltros = (search || '').trim() !== '' || filtrosEstado.length > 0 || filtroVencidos;
     const dataToExport = tieneFiltros ? filtered : mantenimientos;
 
     if (dataToExport.length === 0) return;
@@ -672,9 +671,17 @@ export default function MantenimientosView({
                               <Flag className="h-3 w-3" />
                             </span>
                           )}
-                          <span className="font-mono text-xs font-semibold text-slate-700">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditandoMant(m);
+                              setModalOpen(true);
+                            }}
+                            className="font-mono text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
+                            title="Ver o editar mantenimiento"
+                          >
                             {m.codigo}
-                          </span>
+                          </button>
                         </div>
                         {m.estado_mantenimiento === 'Completado' && (
                           <button
@@ -755,46 +762,11 @@ export default function MantenimientosView({
                       </div>
                     </td>
                     <td className="px-5 py-4">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {m.estado_mantenimiento === 'Completado' && (
-                          <>
-                            <button
-                              onClick={() => handleVerInforme(m)}
-                              className="rounded-lg p-2 text-blue-600 transition-colors hover:bg-blue-50"
-                              title={
-                                m.numero_informe
-                                  ? `Ver Informe Técnico (${m.numero_informe})`
-                                  : 'Ver Informe Técnico'
-                              }
-                              aria-label="Ver informe técnico"
-                            >
-                              <FileText className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => handleReabrirMantenimiento(m)}
-                              className="rounded-lg p-2 text-amber-600 transition-colors hover:bg-amber-50"
-                              title="Reabrir Orden / Modificar Datos"
-                              aria-label="Reabrir orden de trabajo"
-                            >
-                              <RotateCcw className="h-4 w-4" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => {
-                            setEditandoMant(m);
-                            setModalOpen(true);
-                          }}
-                          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                          aria-label="Editar"
-                          title="Editar"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
+                      <div className="flex items-center justify-end">
                         <button
                           onClick={() => handleDelete(m)}
                           className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                          aria-label="Eliminar"
+                          aria-label="Eliminar mantenimiento"
                           title="Eliminar"
                         >
                           <Trash2 className="h-4 w-4" />

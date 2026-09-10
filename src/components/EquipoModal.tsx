@@ -51,13 +51,13 @@ export default function EquipoModal({ open, onClose, onSave, editing, defaultCod
     if (open) {
       setTouched(false);
       if (editing) {
-        setCodigo(editing.codigo);
-        setNombre(editing.nombre);
+        setCodigo(editing.codigo || '');
+        setNombre(editing.nombre || '');
         setMarca(editing.marca ?? '');
         setModelo(editing.modelo ?? '');
         setSerie(editing.serie ?? '');
         setUbicacion(editing.ubicacion ?? '');
-        setEstado(editing.estado);
+        setEstado(editing.estado || 'Operativo');
         setInventario(editing.inventario ?? '');
         setAnioAdquisicion(editing.anio_adquisicion?.toString() ?? '');
         setOrdenCompra(editing.orden_compra ?? '');
@@ -94,26 +94,26 @@ export default function EquipoModal({ open, onClose, onSave, editing, defaultCod
 
   if (!open) return null;
 
-  const valid = nombre.trim() !== '' && serie.trim() !== '';
+  const valid = (nombre || '').trim() !== '' && (serie || '').trim() !== '';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
     if (!valid) return;
     onSave({
-      codigo: codigo.trim(),
-      nombre: nombre.trim(),
-      marca: marca.trim(),
-      modelo: modelo.trim(),
-      serie: serie.trim(),
-      ubicacion: ubicacion.trim(),
+      codigo: (codigo || '').trim(),
+      nombre: (nombre || '').trim(),
+      marca: (marca || '').trim(),
+      modelo: (modelo || '').trim(),
+      serie: (serie || '').trim(),
+      ubicacion: (ubicacion || '').trim(),
       estado,
-      inventario: inventario.trim(),
-      anio_adquisicion: anioAdquisicion.trim(),
-      orden_compra: ordenCompra.trim(),
-      acta_entrega: actaEntrega.trim(),
-      vida_util: vidaUtil.trim(),
-      vida_util_residual: vidaUtilResidual.trim(),
+      inventario: (inventario || '').trim(),
+      anio_adquisicion: (anioAdquisicion || '').trim(),
+      orden_compra: (ordenCompra || '').trim(),
+      acta_entrega: (actaEntrega || '').trim(),
+      vida_util: (vidaUtil || '').trim(),
+      vida_util_residual: (vidaUtilResidual || '').trim(),
       modalidad_adquisicion: modalidad,
     });
   };
@@ -177,7 +177,7 @@ export default function EquipoModal({ open, onClose, onSave, editing, defaultCod
                 onChange={(e) => setNombre(e.target.value)}
                 placeholder="Monitor de Signos Vitales"
               />
-              {touched && !nombre.trim() && (
+              {touched && !(nombre || '').trim() && (
                 <p className="mt-1 text-xs text-rose-500">El nombre es obligatorio</p>
               )}
             </div>
@@ -220,7 +220,7 @@ export default function EquipoModal({ open, onClose, onSave, editing, defaultCod
                 onChange={(e) => setSerie(e.target.value)}
                 placeholder="SN-2024-001"
               />
-              {touched && !serie.trim() && (
+              {touched && !(serie || '').trim() && (
                 <p className="mt-1 text-xs text-rose-500">La serie es obligatoria</p>
               )}
             </div>
