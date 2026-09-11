@@ -98,6 +98,8 @@ export default function MantenimientoModal({
     esTecnico,
   } = useAuth();
 
+  const esRolTecnico = usuarioActivo?.rol === 'Ingeniero de Servicio / Técnico';
+
   const usuariosAsignables = useMemo(() => {
     return (usuarios || []).filter((u) => {
       if (u.activo === false) return false;
@@ -120,13 +122,13 @@ export default function MantenimientoModal({
     if (esAdmin || esSupervisor) return true;
     if (esTecnico) {
       if (!mantenimientoEdicion) return true;
-      if (!mantenimientoEdicion.asignado_a) return true;
-      const asig = mantenimientoEdicion.asignado_a.trim().toLowerCase();
-      const yo = usuarioActivo.nombre.trim().toLowerCase();
-      return asig === yo || asig.includes(yo) || yo.includes(asig);
+      const asignadoVal = (mantenimientoEdicion.asignado_a || '').trim().toLowerCase();
+      if (!asignadoVal) return true;
+      const yo = (usuarioActivo?.nombre || '').trim().toLowerCase();
+      return asignadoVal === yo || asignadoVal.includes(yo) || yo.includes(asignadoVal);
     }
     return false;
-  }, [esAdmin, esSupervisor, esTecnico, mantenimientoEdicion, usuarioActivo.nombre]);
+  }, [esAdmin, esSupervisor, esTecnico, mantenimientoEdicion, usuarioActivo?.nombre]);
 
   const esEdicion = mantenimientoEdicion != null;
 
@@ -251,10 +253,14 @@ export default function MantenimientoModal({
         setEquipoManual(eq ? '' : (mantenimientoEdicion.equipo_identificacion || ''));
         setProblema(mantenimientoEdicion.problema_reportado || '');
         setSolicitadoPor(mantenimientoEdicion.solicitado_por || solicitanteSesionActiva);
-        setAsignadoA(mantenimientoEdicion.asignado_a ?? '');
+        const asignadoOriginal = mantenimientoEdicion.asignado_a ?? '';
+        setAsignadoA(
+          esRolTecnico && !asignadoOriginal ? (usuarioActivo?.nombre || '') : asignadoOriginal
+        );
         setFecha(mantenimientoEdicion.fecha_requerimiento || '');
         setTipo(mantenimientoEdicion.tipo_mantenimiento || 'Correctivo');
-        setEstado(mantenimientoEdicion.estado_mantenimiento || 'Pendiente de Asignación');
+        const estOriginal = mantenimientoEdicion.estado_mantenimiento || 'Pendiente de Asignación';
+        setEstado(esRolTecnico && estOriginal === 'Pendiente de Asignación' ? 'En proceso' : estOriginal);
         setDescripcionTrabajo(mantenimientoEdicion.descripcion_trabajo_realizado ?? '');
         setDiagnosticoFinal(mantenimientoEdicion.diagnostico_final ?? '');
         setRepuestosUtilizados(mantenimientoEdicion.repuestos_utilizados ?? '');
@@ -268,7 +274,10 @@ export default function MantenimientoModal({
         setFotosUrls(mantenimientoEdicion.fotos_url ?? []);
         setDocumentosUrls(mantenimientoEdicion.documentos_url ?? []);
         setAccesoriosAdicionales(mantenimientoEdicion.accesorios_adicionales ?? '');
-        setCompletadoPor(mantenimientoEdicion.completado_por ?? '');
+        setCompletadoPor(
+          mantenimientoEdicion.completado_por ||
+            (esRolTecnico ? (asignadoOriginal || usuarioActivo?.nombre || '') : '')
+        );
         setRecibidoPor(mantenimientoEdicion.recibido_por ?? '');
         setNumeroInforme(mantenimientoEdicion.numero_informe ?? null);
         setFechaEmisionInforme(mantenimientoEdicion.fecha_emision_informe ?? null);
@@ -305,10 +314,10 @@ export default function MantenimientoModal({
         setEquipoManual('');
         setProblema('');
         setSolicitadoPor(solicitanteSesionActiva);
-        setAsignadoA('');
+        setAsignadoA(esRolTecnico ? (usuarioActivo?.nombre || '') : '');
         setFecha(new Date().toISOString().slice(0, 10));
         setTipo('Correctivo');
-        setEstado('Pendiente de Asignación');
+        setEstado(esRolTecnico ? 'En proceso' : 'Pendiente de Asignación');
         setDescripcionTrabajo('');
         setDiagnosticoFinal('');
         setRepuestosUtilizados('');
@@ -318,7 +327,7 @@ export default function MantenimientoModal({
         setFotosUrls([]);
         setDocumentosUrls([]);
         setAccesoriosAdicionales('');
-        setCompletadoPor('');
+        setCompletadoPor(esRolTecnico ? (usuarioActivo?.nombre || '') : '');
         setRecibidoPor('');
         setNumeroInforme(null);
         setFechaEmisionInforme(null);
@@ -327,7 +336,7 @@ export default function MantenimientoModal({
         setExternalizacionVinculada(null);
       }
     }
-  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, solicitanteSesionActiva]);
+  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, solicitanteSesionActiva, esRolTecnico, usuarioActivo]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -588,10 +597,41 @@ export default function MantenimientoModal({
     }
     if (!valid) return;
 
-    const finalEstado: EstadoMantenimiento =
+    let finalEstado: EstadoMantenimiento =
       estado === 'Pendiente de Asignación' && (asignadoA || '').trim() !== ''
         ? 'En proceso'
         : estado;
+
+    if (esRolTecnico && finalEstado === 'Pendiente de Asignación') {
+      finalEstado = 'En proceso';
+    }
+
+    const finalEquipoId =
+      esRolTecnico && mantenimientoEdicion
+        ? (mantenimientoEdicion.equipo_id ?? null)
+        : modoEquipo === 'registrado'
+          ? equipoId || null
+          : null;
+
+    const finalEquipoIdentificacion =
+      esRolTecnico && mantenimientoEdicion
+        ? (mantenimientoEdicion.equipo_identificacion || '').trim()
+        : (identificacion || '').trim();
+
+    const finalProblema =
+      esRolTecnico && mantenimientoEdicion
+        ? (mantenimientoEdicion.problema_reportado || '').trim()
+        : (problema || '').trim();
+
+    const finalAsignadoA =
+      esRolTecnico && mantenimientoEdicion
+        ? (mantenimientoEdicion.asignado_a || asignadoA || '').trim() || null
+        : (asignadoA || '').trim() || null;
+
+    const finalTipo =
+      esRolTecnico && mantenimientoEdicion
+        ? (mantenimientoEdicion.tipo_mantenimiento || 'Correctivo')
+        : tipo;
 
     const codigoOT = mantenimientoEdicion?.codigo || 'MANT-001';
     const finalNumeroInforme =
@@ -610,13 +650,13 @@ export default function MantenimientoModal({
         : ((fechaCierre || '').trim() || null);
 
     onSave({
-      equipo_id: modoEquipo === 'registrado' ? equipoId || null : null,
-      equipo_identificacion: (identificacion || '').trim(),
-      problema_reportado: (problema || '').trim(),
+      equipo_id: finalEquipoId,
+      equipo_identificacion: finalEquipoIdentificacion,
+      problema_reportado: finalProblema,
       solicitado_por: (solicitadoPor || '').trim(),
-      asignado_a: (asignadoA || '').trim() || null,
+      asignado_a: finalAsignadoA,
       fecha_requerimiento: fecha,
-      tipo_mantenimiento: tipo,
+      tipo_mantenimiento: finalTipo,
       estado_mantenimiento: finalEstado,
       descripcion_trabajo_realizado: (descripcionTrabajo || '').trim() || null,
       fecha_cierre: finalFechaCierre,
@@ -731,28 +771,46 @@ export default function MantenimientoModal({
 
           {/* Identificación del equipo */}
           <div className="mb-4">
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Identificación del equipo <span className="text-rose-500">*</span>
-            </label>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="block text-sm font-medium text-slate-700">
+                Identificación del equipo <span className="text-rose-500">*</span>
+              </label>
+              {esRolTecnico && (
+                <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                  <Lock className="h-3 w-3 text-slate-400" />
+                  <span>Equipo bloqueado para técnicos</span>
+                </span>
+              )}
+            </div>
             <div className="mb-2 flex gap-2">
               <button
                 type="button"
+                disabled={esRolTecnico}
                 onClick={() => setModoEquipo('registrado')}
                 className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                   modoEquipo === 'registrado'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? esRolTecnico
+                      ? 'bg-slate-200 text-slate-700 cursor-not-allowed border border-slate-300'
+                      : 'bg-blue-600 text-white shadow-sm'
+                    : esRolTecnico
+                      ? 'bg-gray-100 text-slate-400 cursor-not-allowed'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
                 Seleccionar del inventario
               </button>
               <button
                 type="button"
+                disabled={esRolTecnico}
                 onClick={() => setModoEquipo('manual')}
                 className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                   modoEquipo === 'manual'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? esRolTecnico
+                      ? 'bg-slate-200 text-slate-700 cursor-not-allowed border border-slate-300'
+                      : 'bg-blue-600 text-white shadow-sm'
+                    : esRolTecnico
+                      ? 'bg-gray-100 text-slate-400 cursor-not-allowed'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
                 Ingresar manualmente
@@ -760,7 +818,12 @@ export default function MantenimientoModal({
             </div>
             {modoEquipo === 'registrado' ? (
               <select
-                className={inputClass}
+                disabled={esRolTecnico}
+                className={`${inputClass} ${
+                  esRolTecnico
+                    ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                    : ''
+                }`}
                 value={equipoId}
                 onChange={(e) => setEquipoId(e.target.value)}
               >
@@ -773,7 +836,13 @@ export default function MantenimientoModal({
               </select>
             ) : (
               <input
-                className={inputClass}
+                disabled={esRolTecnico}
+                readOnly={esRolTecnico}
+                className={`${inputClass} ${
+                  esRolTecnico
+                    ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                    : ''
+                }`}
                 value={equipoManual}
                 onChange={(e) => setEquipoManual(e.target.value)}
                 placeholder="Ej: Desfibrilador Zoll R Series (SN-12345)"
@@ -786,11 +855,25 @@ export default function MantenimientoModal({
 
           {/* Problema */}
           <div className="mb-4">
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">
-              Problema reportado o causa <span className="text-rose-500">*</span>
-            </label>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="block text-sm font-medium text-slate-700">
+                Problema reportado o causa <span className="text-rose-500">*</span>
+              </label>
+              {esRolTecnico && (
+                <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                  <Lock className="h-3 w-3 text-slate-400" />
+                  <span>Reporte clínico original (Solo lectura)</span>
+                </span>
+              )}
+            </div>
             <textarea
-              className={`${inputClass} min-h-[75px] resize-y`}
+              disabled={esRolTecnico}
+              readOnly={esRolTecnico}
+              className={`${inputClass} min-h-[75px] resize-y ${
+                esRolTecnico
+                  ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200 resize-none'
+                  : ''
+              }`}
               value={problema}
               onChange={(e) => setProblema(e.target.value)}
               placeholder="Describe detalladamente la falla o motivo del requerimiento..."
@@ -818,23 +901,42 @@ export default function MantenimientoModal({
               )}
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                Asignado a (Técnico / Responsable){' '}
-                {asignadoRequerido && <span className="text-rose-500">*</span>}
-              </label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label className="block text-sm font-medium text-slate-700">
+                  Asignado a (Técnico / Responsable){' '}
+                  {asignadoRequerido && <span className="text-rose-500">*</span>}
+                </label>
+                {esRolTecnico && (
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                    <Lock className="h-3 w-3 text-slate-400" />
+                    <span>No reasignable</span>
+                  </span>
+                )}
+              </div>
               <div ref={asignadoContainerRef} className="relative">
                 <button
                   ref={asignadoInputRef}
                   type="button"
-                  onClick={() => setAsignadoDropdownOpen((prev) => !prev)}
+                  disabled={esRolTecnico}
+                  onClick={() => {
+                    if (esRolTecnico) return;
+                    setAsignadoDropdownOpen((prev) => !prev);
+                  }}
                   onKeyDown={(e) => {
+                    if (esRolTecnico) return;
                     if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       setAsignadoDropdownOpen(true);
                     }
                   }}
-                  className={`${inputClass} flex items-center justify-between text-left cursor-pointer transition ${
-                    ((touched && asignadoRequerido && !(asignadoA || '').trim()) || (estadoError && !(asignadoA || '').trim()))
+                  className={`${inputClass} flex items-center justify-between text-left transition ${
+                    esRolTecnico
+                      ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                      : 'cursor-pointer'
+                  } ${
+                    !esRolTecnico &&
+                    (((touched && asignadoRequerido && !(asignadoA || '').trim()) ||
+                      (estadoError && !(asignadoA || '').trim())))
                       ? '!border-rose-400 focus:!border-rose-500 focus:!ring-rose-200'
                       : ''
                   }`}
@@ -844,17 +946,27 @@ export default function MantenimientoModal({
                   <div className="flex items-center gap-2 truncate pr-2">
                     {asignadoA ? (
                       <>
-                        <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-700">
+                        <span
+                          className={`inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                            esRolTecnico
+                              ? 'bg-slate-200 text-slate-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
                           {asignadoA.charAt(0).toUpperCase()}
                         </span>
                         <span className="truncate font-medium text-slate-900">{asignadoA}</span>
                       </>
                     ) : (
-                      <span className="text-slate-400 truncate">Seleccionar o buscar técnico o supervisor...</span>
+                      <span className="text-slate-400 truncate">
+                        {esRolTecnico
+                          ? 'Sin técnico asignado'
+                          : 'Seleccionar o buscar técnico o supervisor...'}
+                      </span>
                     )}
                   </div>
                   <div className="flex items-center gap-1.5 text-slate-400 flex-shrink-0">
-                    {asignadoA && (
+                    {asignadoA && !esRolTecnico && (
                       <span
                         role="button"
                         tabIndex={0}
@@ -874,16 +986,20 @@ export default function MantenimientoModal({
                         <X className="h-3.5 w-3.5" />
                       </span>
                     )}
-                    <ChevronDown
-                      className={`h-4 w-4 transition-transform duration-200 ${
-                        asignadoDropdownOpen ? 'rotate-180 text-blue-600' : ''
-                      }`}
-                    />
+                    {!esRolTecnico ? (
+                      <ChevronDown
+                        className={`h-4 w-4 transition-transform duration-200 ${
+                          asignadoDropdownOpen ? 'rotate-180 text-blue-600' : ''
+                        }`}
+                      />
+                    ) : (
+                      <Lock className="h-3.5 w-3.5 text-slate-400" />
+                    )}
                   </div>
                 </button>
 
                 {/* Dropdown flotante con buscador integrado */}
-                {asignadoDropdownOpen && (
+                {!esRolTecnico && asignadoDropdownOpen && (
                   <div className="absolute left-0 top-full z-50 mt-1.5 w-full rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in zoom-in-95 duration-100">
                     {/* Input de búsqueda en tiempo real */}
                     <div className="p-2 border-b border-slate-100">
@@ -1005,7 +1121,12 @@ export default function MantenimientoModal({
                   </div>
                 )}
               </div>
-              {(asignadoA || '').trim() !== '' && estado === 'En proceso' ? (
+              {esRolTecnico ? (
+                <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
+                  <Lock className="h-3 w-3 text-slate-400" />
+                  <span>Asignación fija. Solo supervisores o administradores pueden reasignar.</span>
+                </p>
+              ) : (asignadoA || '').trim() !== '' && estado === 'En proceso' ? (
                 <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600">
                   <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-blue-600" />
                   <span>Estado cambiado automáticamente a "En proceso"</span>
@@ -1026,19 +1147,32 @@ export default function MantenimientoModal({
           {/* Tipo y Fecha Requerimiento */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">
-                Tipo de mantenimiento
-              </label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label className="block text-sm font-medium text-slate-700">
+                  Tipo de mantenimiento
+                </label>
+                {esRolTecnico && (
+                  <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                    <Lock className="h-3 w-3 text-slate-400" />
+                    <span>Fijo</span>
+                  </span>
+                )}
+              </div>
               <div className="flex gap-2">
                 {(['Correctivo', 'Preventivo'] as TipoMantenimiento[]).map((t) => (
                   <button
                     key={t}
                     type="button"
+                    disabled={esRolTecnico}
                     onClick={() => setTipo(t)}
                     className={`flex-1 rounded-lg border py-2 text-xs font-semibold transition-all ${
                       tipo === t
-                        ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
-                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                        ? esRolTecnico
+                          ? 'border-slate-300 bg-gray-100 text-slate-700 cursor-not-allowed shadow-none'
+                          : 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
+                        : esRolTecnico
+                          ? 'border-slate-200 bg-gray-100 text-slate-400 cursor-not-allowed opacity-60'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                     }`}
                   >
                     {t}
@@ -1191,15 +1325,22 @@ export default function MantenimientoModal({
                   En proceso
                 </span>
               )}
-              {estado === 'Pendiente de Asignación' && (
+              {estado === 'Pendiente de Asignación' && !esRolTecnico && (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
                   Pendiente de Asignación
                 </span>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {(['Pendiente de Asignación', 'En proceso', 'Completado'] as EstadoMantenimiento[]).map(
-                (est) => {
+            <div
+              className={`grid grid-cols-1 gap-2 ${
+                esRolTecnico ? 'sm:grid-cols-2' : 'sm:grid-cols-3'
+              }`}
+            >
+              {(
+                (esRolTecnico
+                  ? ['En proceso', 'Completado']
+                  : ['Pendiente de Asignación', 'En proceso', 'Completado']) as EstadoMantenimiento[]
+              ).map((est) => {
                   const completadoBloqueado =
                     est === 'Completado' &&
                     (externalizacionBloqueaCierre || !puedeCerrarOT || !puede('cerrar_emitir_informe_ot'));
