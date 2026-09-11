@@ -129,6 +129,220 @@ export interface Externalizacion {
   updated_at: string;
 }
 
+export type RolUsuario =
+  | 'Administrador (Jefe de Unidad)'
+  | 'Ingeniero Supervisor'
+  | 'Ingeniero de Servicio / Técnico'
+  | 'Clínico / Solicitante'
+  | 'Auditor / Directivo';
+
+export interface PermisosUsuario {
+  // Catastro de Equipos
+  ver_equipos: boolean;
+  crear_equipos: boolean;
+  editar_equipos: boolean;
+  eliminar_baja_equipos: boolean;
+  exportar_equipos: boolean;
+
+  // Mantenimiento y OTs
+  ver_mantenimientos: boolean;
+  crear_solicitud_ot: boolean;
+  asignar_tecnico_ot: boolean;
+  cerrar_emitir_informe_ot: boolean;
+  reabrir_anular_ot: boolean;
+  eliminar_ot: boolean;
+  exportar_mantenimientos: boolean;
+
+  // Compras y Externalización
+  ver_externalizacion: boolean;
+  gestionar_etapas_compras: boolean;
+  crear_solicitud_compra: boolean;
+  exportar_compras: boolean;
+
+  // Administración y Usuarios
+  gestionar_usuarios: boolean;
+}
+
+export interface PerfilUsuario {
+  id: string;
+  nombre: string;
+  email: string;
+  rol: RolUsuario;
+  cargo: string;
+  servicio_clinico_asignado?: string | null;
+  password?: string;
+  permisos: PermisosUsuario;
+  activo: boolean;
+  avatar_url?: string | null;
+  created_at: string;
+}
+
+export const PERMISOS_DEFAULT_POR_ROL: Record<RolUsuario, PermisosUsuario> = {
+  'Administrador (Jefe de Unidad)': {
+    ver_equipos: true,
+    crear_equipos: true,
+    editar_equipos: true,
+    eliminar_baja_equipos: true,
+    exportar_equipos: true,
+    ver_mantenimientos: true,
+    crear_solicitud_ot: true,
+    asignar_tecnico_ot: true,
+    cerrar_emitir_informe_ot: true,
+    reabrir_anular_ot: true,
+    eliminar_ot: true,
+    exportar_mantenimientos: true,
+    ver_externalizacion: true,
+    gestionar_etapas_compras: true,
+    crear_solicitud_compra: true,
+    exportar_compras: true,
+    gestionar_usuarios: true,
+  },
+  'Ingeniero Supervisor': {
+    ver_equipos: true,
+    crear_equipos: true,
+    editar_equipos: true,
+    eliminar_baja_equipos: false,
+    exportar_equipos: true,
+    ver_mantenimientos: true,
+    crear_solicitud_ot: true,
+    asignar_tecnico_ot: true,
+    cerrar_emitir_informe_ot: true,
+    reabrir_anular_ot: false,
+    eliminar_ot: false,
+    exportar_mantenimientos: true,
+    ver_externalizacion: true,
+    gestionar_etapas_compras: true,
+    crear_solicitud_compra: true,
+    exportar_compras: true,
+    gestionar_usuarios: false,
+  },
+  'Ingeniero de Servicio / Técnico': {
+    ver_equipos: true,
+    crear_equipos: false,
+    editar_equipos: false,
+    eliminar_baja_equipos: false,
+    exportar_equipos: true,
+    ver_mantenimientos: true,
+    crear_solicitud_ot: false,
+    asignar_tecnico_ot: false,
+    cerrar_emitir_informe_ot: true,
+    reabrir_anular_ot: false,
+    eliminar_ot: false,
+    exportar_mantenimientos: true,
+    ver_externalizacion: true,
+    gestionar_etapas_compras: false,
+    crear_solicitud_compra: false,
+    exportar_compras: true,
+    gestionar_usuarios: false,
+  },
+  'Clínico / Solicitante': {
+    ver_equipos: true,
+    crear_equipos: false,
+    editar_equipos: false,
+    eliminar_baja_equipos: false,
+    exportar_equipos: true,
+    ver_mantenimientos: true,
+    crear_solicitud_ot: true,
+    asignar_tecnico_ot: false,
+    cerrar_emitir_informe_ot: false,
+    reabrir_anular_ot: false,
+    eliminar_ot: false,
+    exportar_mantenimientos: true,
+    ver_externalizacion: false,
+    gestionar_etapas_compras: false,
+    crear_solicitud_compra: false,
+    exportar_compras: false,
+    gestionar_usuarios: false,
+  },
+  'Auditor / Directivo': {
+    ver_equipos: true,
+    crear_equipos: false,
+    editar_equipos: false,
+    eliminar_baja_equipos: false,
+    exportar_equipos: true,
+    ver_mantenimientos: true,
+    crear_solicitud_ot: false,
+    asignar_tecnico_ot: false,
+    cerrar_emitir_informe_ot: false,
+    reabrir_anular_ot: false,
+    eliminar_ot: false,
+    exportar_mantenimientos: true,
+    ver_externalizacion: true,
+    gestionar_etapas_compras: false,
+    crear_solicitud_compra: false,
+    exportar_compras: true,
+    gestionar_usuarios: false,
+  },
+};
+
+export const INITIAL_PERFILES: PerfilUsuario[] = [
+  {
+    id: 'user-001-admin',
+    nombre: 'Ing. Carlos Mendoza',
+    email: 'cmendoza@hospital.cl',
+    rol: 'Administrador (Jefe de Unidad)',
+    cargo: 'Jefe Unidad de Equipos Médicos',
+    servicio_clinico_asignado: null,
+    password: 'admin*uem2026',
+    permisos: { ...PERMISOS_DEFAULT_POR_ROL['Administrador (Jefe de Unidad)'] },
+    activo: true,
+    avatar_url: null,
+    created_at: '2026-01-10T08:00:00.000Z',
+  },
+  {
+    id: 'user-002-supervisor',
+    nombre: 'Ing. Pamela Soto',
+    email: 'psoto@hospital.cl',
+    rol: 'Ingeniero Supervisor',
+    cargo: 'Supervisora de Operaciones Clínicas',
+    servicio_clinico_asignado: null,
+    password: 'super*uem2026',
+    permisos: { ...PERMISOS_DEFAULT_POR_ROL['Ingeniero Supervisor'] },
+    activo: true,
+    avatar_url: null,
+    created_at: '2026-01-15T09:00:00.000Z',
+  },
+  {
+    id: 'user-003-tecnico',
+    nombre: 'Téc. Fernando Ruiz',
+    email: 'fruiz@hospital.cl',
+    rol: 'Ingeniero de Servicio / Técnico',
+    cargo: 'Técnico Especialista en Mantenimiento Biomédico',
+    servicio_clinico_asignado: null,
+    password: 'tec*uem2026',
+    permisos: { ...PERMISOS_DEFAULT_POR_ROL['Ingeniero de Servicio / Técnico'] },
+    activo: true,
+    avatar_url: null,
+    created_at: '2026-02-01T10:00:00.000Z',
+  },
+  {
+    id: 'user-004-clinico',
+    nombre: 'Enf. Marcela Fuentes',
+    email: 'mfuentes@hospital.cl',
+    rol: 'Clínico / Solicitante',
+    cargo: 'Enfermera Coordinadora de UCI',
+    servicio_clinico_asignado: 'UCI - Sala 3',
+    password: 'clinico*uem2026',
+    permisos: { ...PERMISOS_DEFAULT_POR_ROL['Clínico / Solicitante'] },
+    activo: true,
+    avatar_url: null,
+    created_at: '2026-02-10T11:00:00.000Z',
+  },
+  {
+    id: 'user-005-auditor',
+    nombre: 'Dra. Andrea Morales',
+    email: 'amorales@hospital.cl',
+    rol: 'Auditor / Directivo',
+    cargo: 'Directora de Calidad Asistencial y Auditoría',
+    servicio_clinico_asignado: null,
+    password: 'auditor*uem2026',
+    permisos: { ...PERMISOS_DEFAULT_POR_ROL['Auditor / Directivo'] },
+    activo: true,
+    avatar_url: null,
+    created_at: '2026-02-15T12:00:00.000Z',
+  },
+];
+
 const INITIAL_EQUIPOS: Equipo[] = [
   {
     id: '11111111-1111-4111-8111-111111111101',
@@ -515,6 +729,18 @@ function createMockClient() {
   let mantenimientos: Mantenimiento[] = getStored<Mantenimiento[]>('mantenimientos', INITIAL_MANTENIMIENTOS);
   let fallas: FallaMantenimiento[] = getStored<FallaMantenimiento[]>('fallas', []);
   let externalizaciones: Externalizacion[] = getStored<Externalizacion[]>('externalizaciones', INITIAL_EXTERNALIZACIONES);
+  let perfiles: PerfilUsuario[] = getStored<PerfilUsuario[]>('perfiles', INITIAL_PERFILES).map((p) => {
+    if (p.rol === 'Ingeniero de Servicio / Técnico' && p.permisos?.crear_solicitud_ot) {
+      return {
+        ...p,
+        permisos: {
+          ...p.permisos,
+          crear_solicitud_ot: false,
+        },
+      };
+    }
+    return p;
+  });
   const storageFiles = new Map<string, string>();
 
   function generateUuid(): string {
@@ -585,6 +811,7 @@ function createMockClient() {
                 else if (tableName === 'mantenimientos') dataset = [...(mantenimientos as unknown as Record<string, unknown>[])];
                 else if (tableName === 'fallas_mantenimiento') dataset = [...(fallas as unknown as Record<string, unknown>[])];
                 else if (tableName === 'externalizaciones') dataset = [...(externalizaciones as unknown as Record<string, unknown>[])];
+                else if (tableName === 'perfiles') dataset = [...(perfiles as unknown as Record<string, unknown>[])];
 
                 for (const filter of filters) {
                   dataset = dataset.filter(filter);
@@ -634,6 +861,9 @@ function createMockClient() {
             } else if (tableName === 'externalizaciones') {
               externalizaciones = [newItem as unknown as Externalizacion, ...externalizaciones];
               setStored('externalizaciones', externalizaciones);
+            } else if (tableName === 'perfiles') {
+              perfiles = [newItem as unknown as PerfilUsuario, ...perfiles];
+              setStored('perfiles', perfiles);
             }
             created.push(newItem);
           }
@@ -666,6 +896,13 @@ function createMockClient() {
                       : ext
                   );
                   setStored('externalizaciones', externalizaciones);
+                } else if (tableName === 'perfiles') {
+                  perfiles = perfiles.map((p) =>
+                    (p as unknown as Record<string, unknown>)[column] === value
+                      ? ({ ...p, ...updates } as unknown as PerfilUsuario)
+                      : p
+                  );
+                  setStored('perfiles', perfiles);
                 }
                 return { data: null, error: null };
               })();
@@ -697,6 +934,11 @@ function createMockClient() {
                     (ext) => (ext as unknown as Record<string, unknown>)[column] !== value
                   );
                   setStored('externalizaciones', externalizaciones);
+                } else if (tableName === 'perfiles') {
+                  perfiles = perfiles.filter(
+                    (p) => (p as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('perfiles', perfiles);
                 }
                 return { data: null, error: null };
               })();

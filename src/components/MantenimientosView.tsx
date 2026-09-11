@@ -14,11 +14,13 @@ import {
   Flag,
   Download,
   FileText,
+  Stethoscope,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
 import { enrichMantenimiento, saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
 import InformeMantenimientoModal from '@/components/InformeMantenimientoModal';
+import { useAuth } from '@/lib/authContext';
 
 const estadosM: EstadoMantenimiento[] = [
   'Pendiente de Asignación',
@@ -88,6 +90,21 @@ export default function MantenimientosView({
   equipos,
   onEquiposChanged,
 }: MantenimientosViewProps) {
+  const {
+    usuarioActivo,
+    puede,
+    esTecnico,
+    esClinico,
+  } = useAuth();
+
+  const [soloMisOts, setSoloMisOts] = useState<boolean>(() => esTecnico);
+
+  useEffect(() => {
+    if (esTecnico) {
+      setSoloMisOts(true);
+    }
+  }, [esTecnico, usuarioActivo.id]);
+
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,9 +137,50 @@ export default function MantenimientosView({
     fetchMantenimientos();
   }, []);
 
+  // Equipos del servicio del clínico
+  const serviceEquipmentIds = useMemo(() => {
+    if (!esClinico || !usuarioActivo.servicio_clinico_asignado) return null;
+    const serv = usuarioActivo.servicio_clinico_asignado.trim().toLowerCase();
+    return new Set(
+      equipos
+        .filter((eq) => {
+          if (!eq.ubicacion) return false;
+          const u = eq.ubicacion.trim().toLowerCase();
+          return u === serv || u.includes(serv) || serv.includes(u);
+        })
+        .map((eq) => eq.id)
+    );
+  }, [esClinico, usuarioActivo.servicio_clinico_asignado, equipos]);
+
+  // Dataset base filtrado por Rol RBAC
+  const mantenimientosBase = useMemo(() => {
+    // 1. Clínico / Solicitante: ve únicamente las OTs de su servicio clínico asignado
+    if (esClinico && usuarioActivo.servicio_clinico_asignado) {
+      const serv = usuarioActivo.servicio_clinico_asignado.trim().toLowerCase();
+      return mantenimientos.filter((m) => {
+        if (m.equipo_id && serviceEquipmentIds?.has(m.equipo_id)) return true;
+        if (m.equipo_identificacion && m.equipo_identificacion.toLowerCase().includes(serv)) return true;
+        if (m.solicitado_por && m.solicitado_por.toLowerCase().includes(usuarioActivo.nombre.toLowerCase())) return true;
+        return false;
+      });
+    }
+
+    // 2. Ingeniero de Servicio / Técnico: por defecto ve únicamente las OTs asignadas a su nombre/usuario
+    if (esTecnico && soloMisOts) {
+      const tecNombre = usuarioActivo.nombre.trim().toLowerCase();
+      return mantenimientos.filter((m) => {
+        if (!m.asignado_a) return false;
+        const asig = m.asignado_a.trim().toLowerCase();
+        return asig === tecNombre || asig.includes(tecNombre) || tecNombre.includes(asig);
+      });
+    }
+
+    return mantenimientos;
+  }, [mantenimientos, esClinico, esTecnico, soloMisOts, serviceEquipmentIds, usuarioActivo]);
+
   const filtered = useMemo(() => {
     const q = (search || '').trim().toLowerCase();
-    return mantenimientos.filter((m) => {
+    return mantenimientosBase.filter((m) => {
       const matchSearch =
         q === '' ||
         (m.codigo ?? '').toLowerCase().includes(q) ||
@@ -137,12 +195,12 @@ export default function MantenimientosView({
         !filtroVencidos || (m.estado_mantenimiento !== 'Completado' && esVencido(m.fecha_requerimiento));
       return matchSearch && matchEstado && matchVencido;
     });
-  }, [mantenimientos, search, filtrosEstado, filtroVencidos]);
+  }, [mantenimientosBase, search, filtrosEstado, filtroVencidos]);
 
-  const pendientes = mantenimientos.filter((m) => m.estado_mantenimiento === 'Pendiente de Asignación').length;
-  const enProceso = mantenimientos.filter((m) => m.estado_mantenimiento === 'En proceso').length;
-  const completados = mantenimientos.filter((m) => m.estado_mantenimiento === 'Completado').length;
-  const vencidos = mantenimientos.filter(
+  const pendientes = mantenimientosBase.filter((m) => m.estado_mantenimiento === 'Pendiente de Asignación').length;
+  const enProceso = mantenimientosBase.filter((m) => m.estado_mantenimiento === 'En proceso').length;
+  const completados = mantenimientosBase.filter((m) => m.estado_mantenimiento === 'Completado').length;
+  const vencidos = mantenimientosBase.filter(
     (m) => m.estado_mantenimiento !== 'Completado' && esVencido(m.fecha_requerimiento)
   ).length;
 
@@ -152,6 +210,10 @@ export default function MantenimientosView({
   }
 
   async function handleReabrirMantenimiento(m: Mantenimiento) {
+    if (!puede('reabrir_anular_ot')) {
+      alert('La reapertura de órdenes de trabajo está reservada exclusivamente a la Jefatura de Unidad (Administrador).');
+      return;
+    }
     if (
       !confirm(
         `¿Confirmas la reapertura de la orden de trabajo ${m.codigo}?\n\nSu estado cambiará a "En proceso" para que puedas corregir cualquier dato sin borrar el historial previo ni el correlativo técnico (${m.numero_informe || 'asignado'}).`
@@ -445,7 +507,68 @@ export default function MantenimientosView({
           </div>
         )}
 
-      {/* Stats */}
+        {/* Banner de Rol RBAC activo */}
+        {esClinico && usuarioActivo.servicio_clinico_asignado && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 text-xs text-emerald-900 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 flex-shrink-0">
+                <Stethoscope className="h-4 w-4" />
+              </div>
+              <div>
+                <span className="font-bold block text-emerald-950">
+                  Requerimientos del Servicio Clínico: {usuarioActivo.servicio_clinico_asignado}
+                </span>
+                <span className="text-[11px] text-emerald-700">
+                  Visualizando únicamente órdenes de trabajo asociadas a equipamiento de tu servicio.
+                </span>
+              </div>
+            </div>
+            {puede('crear_solicitud_ot') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditandoMant(null);
+                  setModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition active:scale-[0.98] whitespace-nowrap self-start sm:self-auto"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Reportar Falla</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {esTecnico && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-amber-900 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-100 text-amber-700 flex-shrink-0">
+                <Wrench className="h-4 w-4" />
+              </div>
+              <div>
+                <span className="font-bold block text-amber-950">
+                  {soloMisOts
+                    ? `Vista Personal Técnico: OTs asignadas a ${usuarioActivo.nombre}`
+                    : 'Vista Global: Todas las OTs Institucionales (Modo Lectura General)'}
+                </span>
+                <span className="text-[11px] text-amber-700">
+                  {soloMisOts
+                    ? 'Por defecto solo ves tus órdenes asignadas para cerrar y emitir informe técnico.'
+                    : 'Puedes revisar el catálogo general de mantenimientos.'}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSoloMisOts(!soloMisOts)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 transition shadow-2xs whitespace-nowrap self-start sm:self-auto"
+            >
+              {soloMisOts ? 'Ver Todas las OTs' : 'Ver Solo Mis OTs Asignadas'}
+            </button>
+          </div>
+        )}
+
+        {/* Stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         {stats.map((s) => {
           const Icon = s.icon;
@@ -762,15 +885,17 @@ export default function MantenimientosView({
                       </div>
                     </td>
                     <td className="px-5 py-4">
-                      <div className="flex items-center justify-end">
-                        <button
-                          onClick={() => handleDelete(m)}
-                          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                          aria-label="Eliminar mantenimiento"
-                          title="Eliminar"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                      <div className="flex items-center justify-end gap-1">
+                        {puede('eliminar_ot') && (
+                          <button
+                            onClick={() => handleDelete(m)}
+                            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                            aria-label="Eliminar mantenimiento"
+                            title="Eliminar mantenimiento (Exclusivo Administrador)"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -791,17 +916,20 @@ export default function MantenimientosView({
       </div>
       </div>
 
-      {/* Floating add button */}
-      <button
-        onClick={() => {
-          setEditandoMant(null);
-          setModalOpen(true);
-        }}
-        className="fixed bottom-6 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl active:scale-95 print:hidden"
-        aria-label="Nuevo mantenimiento"
-      >
-        <Plus className="h-6 w-6" />
-      </button>
+      {/* Floating add button - only shown if user has permission to create OT */}
+      {puede('crear_solicitud_ot') && (
+        <button
+          onClick={() => {
+            setEditandoMant(null);
+            setModalOpen(true);
+          }}
+          className="fixed bottom-6 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition-all hover:bg-blue-700 hover:shadow-xl active:scale-95 print:hidden"
+          aria-label="Nuevo mantenimiento"
+          title={esClinico ? 'Reportar Falla / Solicitar Mantenimiento' : 'Nueva Orden de Trabajo'}
+        >
+          <Plus className="h-6 w-6" />
+        </button>
+      )}
 
       <MantenimientoModal
         open={modalOpen}

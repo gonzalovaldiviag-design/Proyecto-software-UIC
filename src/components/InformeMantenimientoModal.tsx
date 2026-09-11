@@ -20,6 +20,7 @@ import {
   generarNumeroInforme,
 } from '@/lib/supabase';
 import { getNombreArchivo } from '@/lib/fileUtils';
+import { useAuth } from '@/lib/authContext';
 
 export interface InformeMantenimientoModalProps {
   open: boolean;
@@ -38,6 +39,7 @@ export default function InformeMantenimientoModal({
   equipos,
   onReabrir,
 }: InformeMantenimientoModalProps) {
+  const { puede } = useAuth();
   const reportRef = useRef<HTMLDivElement>(null);
   const [generandoPDF, setGenerandoPDF] = useState(false);
   const [mensajeEstado, setMensajeEstado] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
@@ -516,7 +518,7 @@ export default function InformeMantenimientoModal({
           </div>
 
           <div className="flex items-center gap-2">
-            {onReabrir && (
+            {onReabrir && puede('reabrir_anular_ot') && (
               <button
                 type="button"
                 onClick={() => {

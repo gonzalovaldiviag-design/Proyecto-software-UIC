@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
-import { X, Wrench, PlusCircle, Loader2, AlertCircle, ChevronRight, User } from 'lucide-react';
+import { X, Wrench, PlusCircle, Loader2, AlertCircle, ChevronRight, User, ShoppingBag } from 'lucide-react';
 import { supabase, type Equipo, type Mantenimiento } from '@/lib/supabase';
+import { useAuth } from '@/lib/authContext';
 
 interface MantenimientoChoiceModalProps {
   open: boolean;
   equipo: Equipo | null;
   onClose: () => void;
-  onNuevo: () => void;
+  onNuevo?: () => void;
+  onSelectInterno?: () => void;
+  onSelectExternalizacion?: () => void;
 }
 
 export default function MantenimientoChoiceModal({
@@ -14,7 +17,12 @@ export default function MantenimientoChoiceModal({
   equipo,
   onClose,
   onNuevo,
+  onSelectInterno,
+  onSelectExternalizacion,
 }: MantenimientoChoiceModalProps) {
+  const { puede } = useAuth();
+  const puedeCrearOT = puede('crear_solicitud_ot');
+
   const [paso, setPaso] = useState<'eleccion' | 'falla'>('eleccion');
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [loading, setLoading] = useState(false);
@@ -24,6 +32,14 @@ export default function MantenimientoChoiceModal({
   const [registradoPor, setRegistradoPor] = useState('');
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
+
+  const handleNuevo = () => {
+    if (onSelectInterno) {
+      onSelectInterno();
+    } else if (onNuevo) {
+      onNuevo();
+    }
+  };
 
   useEffect(() => {
     if (open) {
@@ -161,23 +177,47 @@ export default function MantenimientoChoiceModal({
                 </div>
                 <ChevronRight className="h-5 w-5 flex-shrink-0 text-slate-400" />
               </button>
-              <button
-                onClick={onNuevo}
-                className="flex w-full items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-blue-300 hover:bg-blue-50/50 hover:shadow-sm"
-              >
-                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-600">
-                  <PlusCircle className="h-5 w-5" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-slate-900">
-                    Generar nuevo mantenimiento
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Crea un requerimiento de mantenimiento independiente
-                  </p>
-                </div>
-                <ChevronRight className="h-5 w-5 flex-shrink-0 text-slate-400" />
-              </button>
+              {puedeCrearOT && (
+                <button
+                  type="button"
+                  onClick={handleNuevo}
+                  className="flex w-full items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-blue-300 hover:bg-blue-50/50 hover:shadow-sm"
+                >
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-600">
+                    <PlusCircle className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-slate-900">
+                      Generar nuevo mantenimiento
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Crea un requerimiento de mantenimiento independiente
+                    </p>
+                  </div>
+                  <ChevronRight className="h-5 w-5 flex-shrink-0 text-slate-400" />
+                </button>
+              )}
+
+              {onSelectExternalizacion && (
+                <button
+                  type="button"
+                  onClick={onSelectExternalizacion}
+                  className="flex w-full items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-purple-300 hover:bg-purple-50/50 hover:shadow-sm"
+                >
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-600">
+                    <ShoppingBag className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-slate-900">
+                      Gestionar compra externa / repuestos
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Ir al módulo de compras y licitaciones para este equipo
+                    </p>
+                  </div>
+                  <ChevronRight className="h-5 w-5 flex-shrink-0 text-slate-400" />
+                </button>
+              )}
             </div>
           )}
 
@@ -203,15 +243,24 @@ export default function MantenimientoChoiceModal({
                   <p className="text-sm font-medium text-slate-500">
                     No hay mantenimientos abiertos para este equipo
                   </p>
-                  <p className="text-xs text-slate-400">
-                    Genera un nuevo mantenimiento en su lugar
-                  </p>
-                  <button
-                    onClick={onNuevo}
-                    className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
-                  >
-                    Generar nuevo mantenimiento
-                  </button>
+                  {puedeCrearOT ? (
+                    <>
+                      <p className="text-xs text-slate-400">
+                        Genera un nuevo mantenimiento en su lugar
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleNuevo}
+                        className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                      >
+                        Generar nuevo mantenimiento
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400 mt-1 text-center">
+                      Tu perfil técnico no cuenta con facultades para generar nuevas órdenes de trabajo.
+                    </p>
+                  )}
                 </div>
               )}
 

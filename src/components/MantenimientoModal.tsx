@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
   Upload,
@@ -36,6 +36,7 @@ import {
   compressImageToDataUrl,
   processDocumentFile,
 } from '@/lib/fileUtils';
+import { useAuth } from '@/lib/authContext';
 
 export interface MantenimientoFormData {
   equipo_id: string | null;
@@ -85,6 +86,27 @@ export default function MantenimientoModal({
   equipoPreseleccionado,
   mantenimientoEdicion,
 }: MantenimientoModalProps) {
+  const {
+    usuarioActivo,
+    puede,
+    esAdmin,
+    esSupervisor,
+    esTecnico,
+    esClinico,
+  } = useAuth();
+
+  const puedeCerrarOT = useMemo(() => {
+    if (esAdmin || esSupervisor) return true;
+    if (esTecnico) {
+      if (!mantenimientoEdicion) return true;
+      if (!mantenimientoEdicion.asignado_a) return true;
+      const asig = mantenimientoEdicion.asignado_a.trim().toLowerCase();
+      const yo = usuarioActivo.nombre.trim().toLowerCase();
+      return asig === yo || asig.includes(yo) || yo.includes(asig);
+    }
+    return false;
+  }, [esAdmin, esSupervisor, esTecnico, mantenimientoEdicion, usuarioActivo.nombre]);
+
   const esEdicion = mantenimientoEdicion != null;
   const [modoEquipo, setModoEquipo] = useState<'registrado' | 'manual'>('registrado');
   const [equipoId, setEquipoId] = useState('');
@@ -190,7 +212,11 @@ export default function MantenimientoModal({
         );
         setEquipoManual('');
         setProblema('');
-        setSolicitadoPor('');
+        setSolicitadoPor(
+          esClinico
+            ? `${usuarioActivo.nombre}${usuarioActivo.servicio_clinico_asignado ? ` (${usuarioActivo.servicio_clinico_asignado})` : ''}`
+            : ''
+        );
         setAsignadoA('');
         setFecha(new Date().toISOString().slice(0, 10));
         setTipo('Correctivo');
@@ -213,7 +239,7 @@ export default function MantenimientoModal({
         setExternalizacionVinculada(null);
       }
     }
-  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion]);
+  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, esClinico, usuarioActivo.nombre, usuarioActivo.servicio_clinico_asignado]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -442,6 +468,11 @@ export default function MantenimientoModal({
     e.preventDefault();
     setTouched(true);
 
+    if (!esEdicion && !puede('crear_solicitud_ot')) {
+      setEstadoError('Tu perfil técnico no cuenta con facultades para registrar nuevos mantenimientos.');
+      return;
+    }
+
     if (estado === 'En proceso' && (asignadoA || '').trim() === '') {
       setEstadoError(
         'Para guardar en estado "En proceso" es obligatorio rellenar el campo "Asignado a (Técnico / Responsable)".'
@@ -559,6 +590,19 @@ export default function MantenimientoModal({
         </div>
 
         <form onSubmit={handleSubmit} className="max-h-[75vh] overflow-y-auto px-6 py-5">
+          {/* Banner si no tiene facultad para ingresar mantenimientos */}
+          {!esEdicion && !puede('crear_solicitud_ot') && (
+            <div className="mb-5 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800">
+              <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-sm text-rose-900">Facultad de ingreso restringida</p>
+                <p className="mt-1">
+                  Tu rol ({usuarioActivo.rol}) no tiene autorización para generar o ingresar nuevos requerimientos de mantenimiento. Solo los servicios clínicos solicitantes o supervisores pueden originar nuevas solicitudes de OT.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Banner si está completado con Informe Técnico */}
           {esEdicion && estado === 'Completado' && (
             <div className="mb-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50/90 p-4 text-xs text-amber-950 shadow-sm">
@@ -575,15 +619,17 @@ export default function MantenimientoModal({
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleReabrirMantenimiento}
-                className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 active:scale-95 whitespace-nowrap"
-                title="Reabrir esta orden de trabajo para corregir datos sin borrar el historial previo"
-              >
-                <RotateCcw className="h-4 w-4" />
-                <span>Reabrir Orden / Modificar Datos</span>
-              </button>
+              {puede('reabrir_anular_ot') && (
+                <button
+                  type="button"
+                  onClick={handleReabrirMantenimiento}
+                  className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 active:scale-95 whitespace-nowrap"
+                  title="Reabrir esta orden de trabajo para corregir datos sin borrar el historial previo (Exclusivo Administrador)"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  <span>Reabrir Orden / Modificar Datos</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -906,16 +952,23 @@ export default function MantenimientoModal({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {(['Pendiente de Asignación', 'En proceso', 'Completado'] as EstadoMantenimiento[]).map(
                 (est) => {
-                  const completadoBloqueado = est === 'Completado' && externalizacionBloqueaCierre;
+                  const completadoBloqueado =
+                    est === 'Completado' &&
+                    (externalizacionBloqueaCierre || !puedeCerrarOT || !puede('cerrar_emitir_informe_ot'));
+
                   return (
                     <button
                       key={est}
                       type="button"
                       disabled={completadoBloqueado}
                       title={
-                        completadoBloqueado
-                          ? `Bloqueado por integridad: La adquisición externa (${externalizacionVinculada ? externalizacionVinculada.codigo : 'asociada'}) está en etapa "${externalizacionVinculada ? externalizacionVinculada.etapa_actual : 'Cotización'}" y requiere OC.`
-                          : undefined
+                        est === 'Completado' && !puede('cerrar_emitir_informe_ot')
+                          ? 'El cierre y emisión de informe técnico está reservado al personal técnico y supervisor.'
+                          : est === 'Completado' && !puedeCerrarOT
+                            ? `Solo el técnico asignado (${mantenimientoEdicion?.asignado_a || 'responsable'}) o un supervisor pueden cerrar esta OT.`
+                            : completadoBloqueado
+                              ? `Bloqueado por integridad: La adquisición externa (${externalizacionVinculada ? externalizacionVinculada.codigo : 'asociada'}) está en etapa "${externalizacionVinculada ? externalizacionVinculada.etapa_actual : 'Cotización'}" y requiere OC.`
+                              : undefined
                       }
                       onClick={() => {
                         if (est === 'En proceso' && !(asignadoA || '').trim()) {
@@ -1379,13 +1432,18 @@ export default function MantenimientoModal({
             </button>
             <button
               type="submit"
-              disabled={estado === 'Completado' && !cierreValido}
+              disabled={
+                (estado === 'Completado' && !cierreValido) ||
+                (!esEdicion && !puede('crear_solicitud_ot'))
+              }
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold shadow-sm transition-all active:scale-[0.98] ${
-                estado === 'Completado'
-                  ? cierreValido
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
+                (!esEdicion && !puede('crear_solicitud_ot'))
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                  : estado === 'Completado'
+                    ? cierreValido
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
               }`}
             >
               {estado === 'Completado' ? (
