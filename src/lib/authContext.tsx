@@ -56,9 +56,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         setUsuarios(sanitized);
       } else {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem('app_perfiles');
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setUsuarios(parsed);
+                return;
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
         setUsuarios(INITIAL_PERFILES);
       }
     } catch {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem('app_perfiles');
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setUsuarios(parsed);
+              return;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
       setUsuarios(INITIAL_PERFILES);
     } finally {
       setLoading(false);

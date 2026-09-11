@@ -20,8 +20,14 @@ export default function MantenimientoChoiceModal({
   onSelectInterno,
   onSelectExternalizacion,
 }: MantenimientoChoiceModalProps) {
-  const { puede } = useAuth();
+  const { puede, usuarioActivo } = useAuth();
   const puedeCrearOT = puede('crear_solicitud_ot');
+
+  const defaultUsuario = usuarioActivo?.nombre
+    ? (usuarioActivo.servicio_clinico_asignado
+        ? `${usuarioActivo.nombre} (${usuarioActivo.servicio_clinico_asignado})`
+        : usuarioActivo.nombre)
+    : '';
 
   const [paso, setPaso] = useState<'eleccion' | 'falla'>('eleccion');
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
@@ -29,7 +35,7 @@ export default function MantenimientoChoiceModal({
   const [error, setError] = useState<string | null>(null);
   const [mantSeleccionado, setMantSeleccionado] = useState('');
   const [nuevaFalla, setNuevaFalla] = useState('');
-  const [registradoPor, setRegistradoPor] = useState('');
+  const [registradoPor, setRegistradoPor] = useState(defaultUsuario);
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -48,11 +54,11 @@ export default function MantenimientoChoiceModal({
       setError(null);
       setMantSeleccionado('');
       setNuevaFalla('');
-      setRegistradoPor('');
+      setRegistradoPor(defaultUsuario);
       setTouched(false);
       setSaving(false);
     }
-  }, [open, equipo]);
+  }, [open, equipo, defaultUsuario]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -318,9 +324,10 @@ export default function MantenimientoChoiceModal({
                       <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input
                         type="text"
-                        className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3.5 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                        className="w-full rounded-lg border border-slate-200 bg-slate-100 py-2.5 pl-10 pr-3.5 text-sm text-slate-700 cursor-not-allowed select-none focus:outline-none"
                         value={registradoPor}
-                        onChange={(e) => setRegistradoPor(e.target.value)}
+                        readOnly
+                        title="Usuario activo en sesión (no modificable)"
                         placeholder="Nombre de quien registra la falla"
                       />
                     </div>

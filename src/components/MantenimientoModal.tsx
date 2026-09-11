@@ -15,6 +15,9 @@ import {
   Info,
   ShoppingBag,
   Lock,
+  Search,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import {
   supabase,
@@ -88,12 +91,30 @@ export default function MantenimientoModal({
 }: MantenimientoModalProps) {
   const {
     usuarioActivo,
+    usuarios,
     puede,
     esAdmin,
     esSupervisor,
     esTecnico,
-    esClinico,
   } = useAuth();
+
+  const usuariosAsignables = useMemo(() => {
+    return (usuarios || []).filter((u) => {
+      if (u.activo === false) return false;
+      const rolLower = (u.rol || '').toLowerCase();
+      const cargoLower = (u.cargo || '').toLowerCase();
+      return (
+        u.rol === 'Ingeniero Supervisor' ||
+        u.rol === 'Ingeniero de Servicio / Técnico' ||
+        rolLower.includes('supervisor') ||
+        rolLower.includes('técnico') ||
+        rolLower.includes('tecnico') ||
+        cargoLower.includes('supervisor') ||
+        cargoLower.includes('técnico') ||
+        cargoLower.includes('tecnico')
+      );
+    });
+  }, [usuarios]);
 
   const puedeCerrarOT = useMemo(() => {
     if (esAdmin || esSupervisor) return true;
@@ -108,11 +129,19 @@ export default function MantenimientoModal({
   }, [esAdmin, esSupervisor, esTecnico, mantenimientoEdicion, usuarioActivo.nombre]);
 
   const esEdicion = mantenimientoEdicion != null;
+
+  const solicitanteSesionActiva = useMemo(() => {
+    if (!usuarioActivo?.nombre) return '';
+    return usuarioActivo.servicio_clinico_asignado
+      ? `${usuarioActivo.nombre} (${usuarioActivo.servicio_clinico_asignado})`
+      : usuarioActivo.nombre;
+  }, [usuarioActivo]);
+
   const [modoEquipo, setModoEquipo] = useState<'registrado' | 'manual'>('registrado');
   const [equipoId, setEquipoId] = useState('');
   const [equipoManual, setEquipoManual] = useState('');
   const [problema, setProblema] = useState('');
-  const [solicitadoPor, setSolicitadoPor] = useState('');
+  const [solicitadoPor, setSolicitadoPor] = useState(solicitanteSesionActiva);
   const [asignadoA, setAsignadoA] = useState('');
   const [fecha, setFecha] = useState('');
   const [tipo, setTipo] = useState<TipoMantenimiento>('Correctivo');
@@ -144,7 +173,68 @@ export default function MantenimientoModal({
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
-  const asignadoInputRef = useRef<HTMLInputElement>(null);
+  const asignadoInputRef = useRef<HTMLButtonElement>(null);
+  const [asignadoDropdownOpen, setAsignadoDropdownOpen] = useState(false);
+  const [asignadoBusqueda, setAsignadoBusqueda] = useState('');
+  const asignadoContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Filtrado reactivo de técnicos y supervisores por término de búsqueda
+  const usuariosAsignablesFiltrados = useMemo(() => {
+    const q = (asignadoBusqueda || '').trim().toLowerCase();
+    if (!q) return usuariosAsignables;
+    return usuariosAsignables.filter((u) => {
+      const nombre = (u.nombre || '').toLowerCase();
+      const rol = (u.rol || '').toLowerCase();
+      const cargo = (u.cargo || '').toLowerCase();
+      const email = (u.email || '').toLowerCase();
+      return nombre.includes(q) || rol.includes(q) || cargo.includes(q) || email.includes(q);
+    });
+  }, [usuariosAsignables, asignadoBusqueda]);
+
+  const seleccionarAsignado = (val: string) => {
+    setAsignadoA(val);
+    setEstadoError('');
+    if ((val || '').trim() !== '') {
+      if (estado === 'Pendiente de Asignación') {
+        setEstado('En proceso');
+      }
+    } else {
+      if (estado === 'En proceso') {
+        setEstado('Pendiente de Asignación');
+      }
+    }
+    setAsignadoDropdownOpen(false);
+    setAsignadoBusqueda('');
+  };
+
+  // Cerrar dropdown al hacer clic fuera del componente
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        asignadoContainerRef.current &&
+        !asignadoContainerRef.current.contains(event.target as Node)
+      ) {
+        setAsignadoDropdownOpen(false);
+      }
+    }
+    if (asignadoDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [asignadoDropdownOpen]);
+
+  // Autofoco al abrir el buscador interno
+  useEffect(() => {
+    if (asignadoDropdownOpen) {
+      const timer = setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      setAsignadoBusqueda('');
+    }
+  }, [asignadoDropdownOpen]);
 
   useEffect(() => {
     if (open) {
@@ -152,13 +242,15 @@ export default function MantenimientoModal({
       setEstadoError('');
       setStorageNotice(null);
       setReabiertoAviso(null);
+      setAsignadoDropdownOpen(false);
+      setAsignadoBusqueda('');
       if (mantenimientoEdicion) {
         const eq = equipos.find((e) => e.id === mantenimientoEdicion.equipo_id);
         setModoEquipo(eq ? 'registrado' : 'manual');
         setEquipoId(eq ? eq.id : '');
         setEquipoManual(eq ? '' : (mantenimientoEdicion.equipo_identificacion || ''));
         setProblema(mantenimientoEdicion.problema_reportado || '');
-        setSolicitadoPor(mantenimientoEdicion.solicitado_por || '');
+        setSolicitadoPor(mantenimientoEdicion.solicitado_por || solicitanteSesionActiva);
         setAsignadoA(mantenimientoEdicion.asignado_a ?? '');
         setFecha(mantenimientoEdicion.fecha_requerimiento || '');
         setTipo(mantenimientoEdicion.tipo_mantenimiento || 'Correctivo');
@@ -212,11 +304,7 @@ export default function MantenimientoModal({
         );
         setEquipoManual('');
         setProblema('');
-        setSolicitadoPor(
-          esClinico
-            ? `${usuarioActivo.nombre}${usuarioActivo.servicio_clinico_asignado ? ` (${usuarioActivo.servicio_clinico_asignado})` : ''}`
-            : ''
-        );
+        setSolicitadoPor(solicitanteSesionActiva);
         setAsignadoA('');
         setFecha(new Date().toISOString().slice(0, 10));
         setTipo('Correctivo');
@@ -239,7 +327,7 @@ export default function MantenimientoModal({
         setExternalizacionVinculada(null);
       }
     }
-  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, esClinico, usuarioActivo.nombre, usuarioActivo.servicio_clinico_asignado]);
+  }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, solicitanteSesionActiva]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -719,9 +807,10 @@ export default function MantenimientoModal({
                 Solicitado por <span className="text-rose-500">*</span>
               </label>
               <input
-                className={inputClass}
+                className={`${inputClass} !bg-slate-100 !text-slate-700 !border-slate-200 cursor-not-allowed focus:!ring-0 focus:!border-slate-200 select-none`}
                 value={solicitadoPor}
-                onChange={(e) => setSolicitadoPor(e.target.value)}
+                readOnly
+                title="Usuario activo en sesión (este campo no puede ser modificado manualmente)"
                 placeholder="Nombre del solicitante o servicio"
               />
               {touched && !(solicitadoPor || '').trim() && (
@@ -733,30 +822,189 @@ export default function MantenimientoModal({
                 Asignado a (Técnico / Responsable){' '}
                 {asignadoRequerido && <span className="text-rose-500">*</span>}
               </label>
-              <input
-                ref={asignadoInputRef}
-                className={`${inputClass} ${
-                  ((touched && asignadoRequerido && !(asignadoA || '').trim()) || (estadoError && !(asignadoA || '').trim()))
-                    ? '!border-rose-400 focus:!border-rose-500 focus:!ring-rose-200'
-                    : ''
-                }`}
-                value={asignadoA}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setAsignadoA(val);
-                  setEstadoError('');
-                  if ((val || '').trim() !== '') {
-                    if (estado === 'Pendiente de Asignación') {
-                      setEstado('En proceso');
+              <div ref={asignadoContainerRef} className="relative">
+                <button
+                  ref={asignadoInputRef}
+                  type="button"
+                  onClick={() => setAsignadoDropdownOpen((prev) => !prev)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setAsignadoDropdownOpen(true);
                     }
-                  } else {
-                    if (estado === 'En proceso') {
-                      setEstado('Pendiente de Asignación');
-                    }
-                  }
-                }}
-                placeholder="Técnico o empresa responsable"
-              />
+                  }}
+                  className={`${inputClass} flex items-center justify-between text-left cursor-pointer transition ${
+                    ((touched && asignadoRequerido && !(asignadoA || '').trim()) || (estadoError && !(asignadoA || '').trim()))
+                      ? '!border-rose-400 focus:!border-rose-500 focus:!ring-rose-200'
+                      : ''
+                  }`}
+                  aria-haspopup="listbox"
+                  aria-expanded={asignadoDropdownOpen}
+                >
+                  <div className="flex items-center gap-2 truncate pr-2">
+                    {asignadoA ? (
+                      <>
+                        <span className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-700">
+                          {asignadoA.charAt(0).toUpperCase()}
+                        </span>
+                        <span className="truncate font-medium text-slate-900">{asignadoA}</span>
+                      </>
+                    ) : (
+                      <span className="text-slate-400 truncate">Seleccionar o buscar técnico o supervisor...</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400 flex-shrink-0">
+                    {asignadoA && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          seleccionarAsignado('');
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            seleccionarAsignado('');
+                          }
+                        }}
+                        className="rounded p-0.5 hover:bg-slate-200 hover:text-slate-600 transition"
+                        title="Limpiar asignación"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                    <ChevronDown
+                      className={`h-4 w-4 transition-transform duration-200 ${
+                        asignadoDropdownOpen ? 'rotate-180 text-blue-600' : ''
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {/* Dropdown flotante con buscador integrado */}
+                {asignadoDropdownOpen && (
+                  <div className="absolute left-0 top-full z-50 mt-1.5 w-full rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in zoom-in-95 duration-100">
+                    {/* Input de búsqueda en tiempo real */}
+                    <div className="p-2 border-b border-slate-100">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                        <input
+                          ref={searchInputRef}
+                          type="text"
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          placeholder="Buscar por nombre, cargo o rol..."
+                          value={asignadoBusqueda}
+                          onChange={(e) => setAsignadoBusqueda(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setAsignadoDropdownOpen(false);
+                            }
+                          }}
+                        />
+                        {asignadoBusqueda && (
+                          <button
+                            type="button"
+                            onClick={() => setAsignadoBusqueda('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Lista de resultados filtrados */}
+                    <div className="max-h-56 overflow-y-auto p-1 text-xs divide-y divide-slate-50">
+                      {/* Opción para desasignar si hay un usuario seleccionado */}
+                      {asignadoA && (
+                        <button
+                          type="button"
+                          onClick={() => seleccionarAsignado('')}
+                          className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-slate-500 hover:bg-slate-100 transition"
+                        >
+                          <span className="italic">Sin asignar (Dejar pendiente de asignación)</span>
+                        </button>
+                      )}
+
+                      {/* Opción preexistente si no figura en usuarios activos actuales */}
+                      {asignadoA &&
+                        !usuariosAsignables.some((u) => u.nombre === asignadoA) &&
+                        (!asignadoBusqueda || asignadoA.toLowerCase().includes(asignadoBusqueda.toLowerCase())) && (
+                          <button
+                            type="button"
+                            onClick={() => seleccionarAsignado(asignadoA)}
+                            className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left bg-blue-50/50 hover:bg-blue-100/70 transition"
+                          >
+                            <div>
+                              <p className="font-semibold text-slate-800">{asignadoA}</p>
+                              <p className="text-[11px] text-slate-500">Registrado previamente</p>
+                            </div>
+                            <Check className="h-4 w-4 text-blue-600" />
+                          </button>
+                        )}
+
+                      {usuariosAsignablesFiltrados.length === 0 ? (
+                        <div className="p-4 text-center text-slate-400">
+                          <p className="font-medium text-slate-600">No se encontraron resultados</p>
+                          <p className="mt-0.5 text-[11px]">
+                            Ningún técnico o supervisor coincide con "{asignadoBusqueda}"
+                          </p>
+                        </div>
+                      ) : (
+                        usuariosAsignablesFiltrados.map((u) => {
+                          const isSelected = asignadoA === u.nombre;
+                          const esSupervisorUser = (u.rol || '').toLowerCase().includes('supervisor');
+                          return (
+                            <button
+                              key={u.id}
+                              type="button"
+                              onClick={() => seleccionarAsignado(u.nombre)}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition ${
+                                isSelected
+                                  ? 'bg-blue-50 text-blue-900 font-medium'
+                                  : 'hover:bg-slate-50 text-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 truncate">
+                                <div
+                                  className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                                    esSupervisorUser
+                                      ? 'bg-purple-100 text-purple-700'
+                                      : 'bg-sky-100 text-sky-700'
+                                  }`}
+                                >
+                                  {u.nombre.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="truncate">
+                                  <p className="truncate font-semibold text-slate-900">{u.nombre}</p>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                                    <span
+                                      className={`inline-block rounded px-1.5 py-0.2 font-medium ${
+                                        esSupervisorUser
+                                          ? 'bg-purple-50 text-purple-700 border border-purple-200/50'
+                                          : 'bg-sky-50 text-sky-700 border border-sky-200/50'
+                                      }`}
+                                    >
+                                      {u.rol}
+                                    </span>
+                                    {u.cargo && <span className="truncate">· {u.cargo}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                              {isSelected && <Check className="h-4 w-4 text-blue-600 flex-shrink-0 ml-2" />}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="border-t border-slate-100 bg-slate-50/80 px-3 py-1.5 text-[11px] text-slate-500 flex items-center justify-between rounded-b-xl">
+                      <span>{usuariosAsignablesFiltrados.length} disponibles</span>
+                      <span className="font-medium text-slate-400">Supervisores y Técnicos</span>
+                    </div>
+                  </div>
+                )}
+              </div>
               {(asignadoA || '').trim() !== '' && estado === 'En proceso' ? (
                 <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600">
                   <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-blue-600" />
@@ -764,7 +1012,7 @@ export default function MantenimientoModal({
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-slate-500">
-                  Requerido para pasar al estado "En proceso". Se actualiza automáticamente al escribir.
+                  Solo se listan técnicos y supervisores autorizados en el sistema.
                 </p>
               )}
               {touched && asignadoRequerido && !(asignadoA || '').trim() && (

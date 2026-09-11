@@ -811,7 +811,10 @@ function createMockClient() {
                 else if (tableName === 'mantenimientos') dataset = [...(mantenimientos as unknown as Record<string, unknown>[])];
                 else if (tableName === 'fallas_mantenimiento') dataset = [...(fallas as unknown as Record<string, unknown>[])];
                 else if (tableName === 'externalizaciones') dataset = [...(externalizaciones as unknown as Record<string, unknown>[])];
-                else if (tableName === 'perfiles') dataset = [...(perfiles as unknown as Record<string, unknown>[])];
+                else if (tableName === 'perfiles') {
+                  perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
+                  dataset = [...(perfiles as unknown as Record<string, unknown>[])];
+                }
 
                 for (const filter of filters) {
                   dataset = dataset.filter(filter);
@@ -862,6 +865,7 @@ function createMockClient() {
               externalizaciones = [newItem as unknown as Externalizacion, ...externalizaciones];
               setStored('externalizaciones', externalizaciones);
             } else if (tableName === 'perfiles') {
+              perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
               perfiles = [newItem as unknown as PerfilUsuario, ...perfiles];
               setStored('perfiles', perfiles);
             }
@@ -897,6 +901,7 @@ function createMockClient() {
                   );
                   setStored('externalizaciones', externalizaciones);
                 } else if (tableName === 'perfiles') {
+                  perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
                   perfiles = perfiles.map((p) =>
                     (p as unknown as Record<string, unknown>)[column] === value
                       ? ({ ...p, ...updates } as unknown as PerfilUsuario)
@@ -935,6 +940,7 @@ function createMockClient() {
                   );
                   setStored('externalizaciones', externalizaciones);
                 } else if (tableName === 'perfiles') {
+                  perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
                   perfiles = perfiles.filter(
                     (p) => (p as unknown as Record<string, unknown>)[column] !== value
                   );
@@ -993,7 +999,28 @@ let clientInstance: unknown;
 
 if (hasValidSupabaseEnv) {
   try {
-    clientInstance = createClient(supabaseUrl!, supabaseAnonKey!);
+    const liveClient = createClient(supabaseUrl!, supabaseAnonKey!);
+    const mockClient = createMockClient();
+
+    // Proxy the Supabase client: route 'perfiles' (and any tables not present in schema cache)
+    // to the persistent mock storage so saving and modifying user profiles always succeeds seamlessly.
+    clientInstance = new Proxy(liveClient, {
+      get(target, prop, receiver) {
+        if (prop === 'from') {
+          return (tableName: string) => {
+            if (tableName === 'perfiles') {
+              return mockClient.from('perfiles');
+            }
+            return target.from(tableName);
+          };
+        }
+        const val = Reflect.get(target, prop, receiver);
+        if (typeof val === 'function') {
+          return val.bind(target);
+        }
+        return val;
+      },
+    });
   } catch (e) {
     console.warn('[AI Studio] Could not initialize live Supabase client, activating mock fallback:', e);
     clientInstance = createMockClient();

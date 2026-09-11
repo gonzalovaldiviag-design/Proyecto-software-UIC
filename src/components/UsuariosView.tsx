@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Sliders,
   LogIn,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import {
@@ -176,6 +177,8 @@ export default function UsuariosView() {
   const [usuarioEditando, setUsuarioEditando] = useState<PerfilUsuario | null>(null);
   const [modalCargaMasivaOpen, setModalCargaMasivaOpen] = useState(false);
   const [mensajeAlerta, setMensajeAlerta] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [errorModal, setErrorModal] = useState<string | null>(null);
 
   // Form state
   const [formNombre, setFormNombre] = useState('');
@@ -207,6 +210,7 @@ export default function UsuariosView() {
 
   const abrirCrear = () => {
     setUsuarioEditando(null);
+    setErrorModal(null);
     setFormNombre('');
     setFormEmail('');
     setFormRol('Ingeniero de Servicio / Técnico');
@@ -221,6 +225,7 @@ export default function UsuariosView() {
 
   const abrirEditar = (u: PerfilUsuario) => {
     setUsuarioEditando(u);
+    setErrorModal(null);
     setFormNombre(u.nombre);
     setFormEmail(u.email);
     setFormRol(u.rol);
@@ -269,49 +274,60 @@ export default function UsuariosView() {
   const handleGuardarUsuario = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formNombre.trim() || !formEmail.trim()) {
-      setMensajeAlerta({ tipo: 'error', texto: 'El nombre y correo electrónico son obligatorios.' });
+      setErrorModal('El nombre y correo electrónico son obligatorios.');
       return;
     }
 
-    if (usuarioEditando) {
-      const payload: PerfilUsuario = {
-        ...usuarioEditando,
-        nombre: formNombre.trim(),
-        email: formEmail.trim(),
-        rol: formRol,
-        cargo: formCargo.trim(),
-        servicio_clinico_asignado: formRol === 'Clínico / Solicitante' ? formServicio : null,
-        password: formPassword,
-        activo: formActivo,
-        permisos: formPermisos,
-      };
-      const res = await actualizarUsuario(payload);
-      if (res.ok) {
-        setMensajeAlerta({ tipo: 'exito', texto: `Usuario "${formNombre}" actualizado con éxito.` });
-        setModalUsuarioOpen(false);
+    setGuardando(true);
+    setErrorModal(null);
+
+    try {
+      if (usuarioEditando) {
+        const payload: PerfilUsuario = {
+          ...usuarioEditando,
+          nombre: formNombre.trim(),
+          email: formEmail.trim(),
+          rol: formRol,
+          cargo: formCargo.trim(),
+          servicio_clinico_asignado: formRol === 'Clínico / Solicitante' ? formServicio : null,
+          password: formPassword,
+          activo: formActivo,
+          permisos: formPermisos,
+        };
+        const res = await actualizarUsuario(payload);
+        if (res.ok) {
+          setMensajeAlerta({ tipo: 'exito', texto: `Usuario "${formNombre}" actualizado con éxito.` });
+          setModalUsuarioOpen(false);
+        } else {
+          setErrorModal(res.error || 'Error al actualizar usuario');
+          setMensajeAlerta({ tipo: 'error', texto: res.error || 'Error al actualizar usuario' });
+        }
       } else {
-        setMensajeAlerta({ tipo: 'error', texto: res.error || 'Error al actualizar usuario' });
+        const payload: Omit<PerfilUsuario, 'id' | 'created_at'> = {
+          nombre: formNombre.trim(),
+          email: formEmail.trim(),
+          rol: formRol,
+          cargo: formCargo.trim(),
+          servicio_clinico_asignado: formRol === 'Clínico / Solicitante' ? formServicio : null,
+          password: formPassword,
+          activo: formActivo,
+          permisos: formPermisos,
+        };
+        const res = await crearUsuario(payload);
+        if (res.ok) {
+          setMensajeAlerta({ tipo: 'exito', texto: `Usuario "${formNombre}" creado con éxito.` });
+          setModalUsuarioOpen(false);
+        } else {
+          setErrorModal(res.error || 'Error al crear usuario');
+          setMensajeAlerta({ tipo: 'error', texto: res.error || 'Error al crear usuario' });
+        }
       }
-    } else {
-      const payload: Omit<PerfilUsuario, 'id' | 'created_at'> = {
-        nombre: formNombre.trim(),
-        email: formEmail.trim(),
-        rol: formRol,
-        cargo: formCargo.trim(),
-        servicio_clinico_asignado: formRol === 'Clínico / Solicitante' ? formServicio : null,
-        password: formPassword,
-        activo: formActivo,
-        permisos: formPermisos,
-      };
-      const res = await crearUsuario(payload);
-      if (res.ok) {
-        setMensajeAlerta({ tipo: 'exito', texto: `Usuario "${formNombre}" creado con éxito.` });
-        setModalUsuarioOpen(false);
-      } else {
-        setMensajeAlerta({ tipo: 'error', texto: res.error || 'Error al crear usuario' });
-      }
+    } catch (err) {
+      setErrorModal(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGuardando(false);
+      setTimeout(() => setMensajeAlerta(null), 4000);
     }
-    setTimeout(() => setMensajeAlerta(null), 4000);
   };
 
   const handleEliminar = async (u: PerfilUsuario) => {
@@ -626,6 +642,16 @@ export default function UsuariosView() {
             </div>
 
             <form onSubmit={handleGuardarUsuario} className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              {errorModal && (
+                <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-800 animate-in fade-in">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold">Error al guardar usuario</p>
+                    <p className="mt-0.5 leading-relaxed">{errorModal}</p>
+                  </div>
+                </div>
+              )}
+
               {/* Sección 1: Datos Generales */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -868,9 +894,11 @@ export default function UsuariosView() {
                 </button>
                 <button
                   type="submit"
-                  className="rounded-xl bg-purple-600 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-purple-700 active:scale-[0.98] transition"
+                  disabled={guardando}
+                  className="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-purple-700 active:scale-[0.98] transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {usuarioEditando ? 'Guardar Cambios' : 'Crear Usuario'}
+                  {guardando && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  <span>{guardando ? 'Guardando...' : (usuarioEditando ? 'Guardar Cambios' : 'Crear Usuario')}</span>
                 </button>
               </div>
             </form>
