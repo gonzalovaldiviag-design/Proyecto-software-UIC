@@ -39,22 +39,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refetchUsuarios = useCallback(async () => {
+    const sanitizePerfiles = (list: PerfilUsuario[]) =>
+      list.map((p) => {
+        if (p.rol === 'Ingeniero de Servicio / Técnico') {
+          return {
+            ...p,
+            permisos: {
+              ...p.permisos,
+              crear_solicitud_ot: false,
+              gestionar_etapas_compras: false,
+              crear_solicitud_compra: false,
+            },
+          };
+        }
+        return p;
+      });
+
     try {
       const { data, error } = await supabase.from('perfiles').select('*');
       if (!error && data && data.length > 0) {
-        const sanitized = (data as unknown as PerfilUsuario[]).map((p) => {
-          if (p.rol === 'Ingeniero de Servicio / Técnico') {
-            return {
-              ...p,
-              permisos: {
-                ...p.permisos,
-                crear_solicitud_ot: false,
-              },
-            };
-          }
-          return p;
-        });
-        setUsuarios(sanitized);
+        setUsuarios(sanitizePerfiles(data as unknown as PerfilUsuario[]));
       } else {
         if (typeof window !== 'undefined') {
           const raw = localStorage.getItem('app_perfiles');
@@ -62,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             try {
               const parsed = JSON.parse(raw);
               if (Array.isArray(parsed) && parsed.length > 0) {
-                setUsuarios(parsed);
+                setUsuarios(sanitizePerfiles(parsed));
                 return;
               }
             } catch {
@@ -79,7 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           try {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              setUsuarios(parsed);
+              setUsuarios(sanitizePerfiles(parsed));
               return;
             }
           } catch {
@@ -115,9 +119,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!usuarioActivo || !usuarioActivo.activo) return false;
       // Administrador siempre tiene acceso total
       if (usuarioActivo.rol === 'Administrador (Jefe de Unidad)') return true;
-      // Los técnicos no tienen facultad para ingresar nuevos mantenimientos ni solicitudes de OT
-      if (usuarioActivo.rol === 'Ingeniero de Servicio / Técnico' && permiso === 'crear_solicitud_ot') {
-        return false;
+      // Los técnicos no tienen facultad para ingresar nuevos mantenimientos ni solicitudes de OT,
+      // ni editar los estados de seguimiento y control de adquisición (solo visualizar la etapa).
+      if (usuarioActivo.rol === 'Ingeniero de Servicio / Técnico') {
+        if (
+          permiso === 'crear_solicitud_ot' ||
+          permiso === 'gestionar_etapas_compras' ||
+          permiso === 'crear_solicitud_compra'
+        ) {
+          return false;
+        }
       }
       return Boolean(usuarioActivo.permisos && usuarioActivo.permisos[permiso]);
     },

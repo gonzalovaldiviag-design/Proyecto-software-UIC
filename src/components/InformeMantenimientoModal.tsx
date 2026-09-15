@@ -485,7 +485,7 @@ export default function InformeMantenimientoModal({
   return (
     <div
       id="informe-modal-wrapper"
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 print-modal-overlay"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 print-modal-overlay"
     >
       {/* Fondo oscuro - oculto al imprimir */}
       <div

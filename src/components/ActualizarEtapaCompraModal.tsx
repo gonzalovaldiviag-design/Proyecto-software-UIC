@@ -16,6 +16,7 @@ import {
   HelpCircle,
   Clock,
   Loader2,
+  Link2,
 } from 'lucide-react';
 import {
   supabase,
@@ -30,6 +31,7 @@ import {
   isValidNumeroOC,
 } from '@/lib/externalizacionStorage';
 import { processDocumentFile } from '@/lib/fileUtils';
+import { useAuth } from '@/lib/authContext';
 
 interface ActualizarEtapaCompraModalProps {
   open: boolean;
@@ -47,6 +49,9 @@ export default function ActualizarEtapaCompraModal({
   externalizacion,
   onUpdated,
 }: ActualizarEtapaCompraModalProps) {
+  const { puede, esTecnico } = useAuth();
+  const puedeGestionar = puede('gestionar_etapas_compras') && !esTecnico;
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ folio?: string; oc?: string }>({});
@@ -167,6 +172,10 @@ export default function ActualizarEtapaCompraModal({
 
   async function handleFileUpload(file: File, type: 'cotizacion' | 'informe' | 'oc') {
     if (!externalizacion) return;
+    if (!puedeGestionar) {
+      setError('Acción restringida: Tu perfil técnico solo cuenta con permisos de visualización.');
+      return;
+    }
     setError(null);
     setUploadSuccessMessage(null);
     setUploadingType(type);
@@ -249,6 +258,7 @@ export default function ActualizarEtapaCompraModal({
   }
 
   function handleSelectStage(targetEtapa: EtapaExternalizacion) {
+    if (!puedeGestionar) return;
     const targetIdx = getEtapaIndex(targetEtapa);
     if (targetIdx >= 3 && !isEtapa3Completa) {
       setError(
@@ -271,6 +281,10 @@ export default function ActualizarEtapaCompraModal({
 
   async function handleSubmit(avanzar: boolean) {
     if (!externalizacion) return;
+    if (!puedeGestionar) {
+      setError('Acción restringida: Tu perfil técnico solo cuenta con permisos de visualización.');
+      return;
+    }
     setError(null);
     setFieldErrors({});
 
@@ -418,6 +432,16 @@ export default function ActualizarEtapaCompraModal({
           </button>
         </div>
 
+        {/* Banner de solo lectura para técnicos */}
+        {!puedeGestionar && (
+          <div className="mx-6 mt-4 flex items-center gap-2.5 rounded-xl border border-blue-200 bg-blue-50/80 p-3 text-xs text-blue-900">
+            <AlertCircle className="h-4 w-4 text-blue-600 flex-shrink-0" />
+            <p>
+              <strong>Modo de solo lectura (Perfil Técnico):</strong> Tienes autorización para visualizar el estado y trazabilidad de este proceso de adquisición. La edición, carga de antecedentes y avance de etapas está reservada a Jefatura y Supervisión.
+            </p>
+          </div>
+        )}
+
         {/* Stepper interactivo de 5 etapas */}
         <div className="border-b border-slate-200 bg-white px-6 py-4">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-500">
@@ -442,8 +466,11 @@ export default function ActualizarEtapaCompraModal({
                 <button
                   type="button"
                   key={etapa}
+                  disabled={!puedeGestionar}
                   onClick={() => handleSelectStage(etapa)}
-                  className={`relative flex flex-col rounded-xl border p-2 text-left transition-all cursor-pointer ${
+                  className={`relative flex flex-col rounded-xl border p-2 text-left transition-all ${
+                    !puedeGestionar ? 'cursor-default' : 'cursor-pointer'
+                  } ${
                     isCurrent
                       ? isCompleted
                         ? 'border-emerald-500 bg-emerald-50/90 text-emerald-950 ring-2 ring-emerald-500/20 shadow-xs'
@@ -752,7 +779,51 @@ export default function ActualizarEtapaCompraModal({
 
               <div className="sm:col-span-2">
                 <label className="mb-1 block text-xs font-medium text-slate-700">
-                  Adjuntar PDF del Requerimiento o Enlace Documental
+                  Link o Dirección del Informe de Requerimiento
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      id="input-link-informe-req"
+                      type="url"
+                      disabled={!puedeGestionar}
+                      className={`${inputClass} pl-9`}
+                      placeholder="https://gestordocumental.hospital.cl/req/0941 o enlace a Drive/SharePoint"
+                      value={informeReqUrl && !informeReqUrl.startsWith('data:') ? informeReqUrl : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setInformeReqUrl(val);
+                        if (val && !informeReqNombre) {
+                          setInformeReqNombre('Enlace al Informe de Requerimiento');
+                        } else if (!val && informeReqNombre === 'Enlace al Informe de Requerimiento') {
+                          setInformeReqNombre('');
+                        }
+                      }}
+                    />
+                  </div>
+                  {informeReqUrl && !informeReqUrl.startsWith('data:') && (
+                    <a
+                      href={
+                        informeReqUrl.startsWith('http://') || informeReqUrl.startsWith('https://')
+                          ? informeReqUrl
+                          : `https://${informeReqUrl}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition shadow-2xs flex-shrink-0"
+                      title="Probar y abrir enlace del informe"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Abrir enlace</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-xs font-medium text-slate-700">
+                  Adjuntar PDF del Requerimiento (Opcional)
                 </label>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <label
@@ -1132,60 +1203,69 @@ export default function ActualizarEtapaCompraModal({
             onClick={onClose}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition"
           >
-            Cancelar
+            {puedeGestionar ? 'Cancelar' : 'Cerrar'}
           </button>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {currentStageIndex === 2 && !isEtapa3Completa && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
-                <span>N° Folio SC requerido para completar Etapa 3</span>
+          {!puedeGestionar ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 font-medium">Etapa en seguimiento:</span>
+              <span className="rounded-md bg-white px-2.5 py-1 text-xs font-bold text-blue-800 border border-slate-200 shadow-2xs">
+                {etapaSeleccionada}
               </span>
-            )}
-            {currentStageIndex === 3 && !isEtapa4Completa && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
-                <span>N° OC Mercado Público requerido para completar Etapa 4</span>
-              </span>
-            )}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              {currentStageIndex === 2 && !isEtapa3Completa && (
+                <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                  <span>N° Folio SC requerido para completar Etapa 3</span>
+                </span>
+              )}
+              {currentStageIndex === 3 && !isEtapa4Completa && (
+                <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" />
+                  <span>N° OC Mercado Público requerido para completar Etapa 4</span>
+                </span>
+              )}
 
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => handleSubmit(false)}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-100 transition disabled:opacity-50"
-            >
-              Guardar Cambios
-            </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleSubmit(false)}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-100 transition disabled:opacity-50"
+              >
+                Guardar Cambios
+              </button>
 
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => handleSubmit(true)}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold text-white shadow-xs transition disabled:opacity-50 ${
-                (currentStageIndex === 3 && isEtapa4Completa) || (currentStageIndex === 4 && isEtapa4Completa)
-                  ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : currentStageIndex === 2 && isEtapa3Completa
-                    ? 'bg-blue-600 hover:bg-blue-700'
-                    : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              <span>
-                {currentStageIndex === 2
-                  ? isEtapa3Completa
-                    ? 'Guardar y Avanzar a Etapa 4 (En Espera de OC)'
-                    : 'Completar Etapa 3 y Avanzar a Etapa 4'
-                  : currentStageIndex === 3
-                    ? isEtapa4Completa
-                      ? 'Guardar y Finalizar Adquisición (Etapa 5)'
-                      : 'Guardar Avance en Etapa 4 (En Espera de OC)'
-                    : currentStageIndex === 4
-                      ? 'Guardar Adquisición Finalizada'
-                      : 'Guardar y Avanzar a Siguiente Etapa'}
-              </span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => handleSubmit(true)}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold text-white shadow-xs transition disabled:opacity-50 ${
+                  (currentStageIndex === 3 && isEtapa4Completa) || (currentStageIndex === 4 && isEtapa4Completa)
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : currentStageIndex === 2 && isEtapa3Completa
+                      ? 'bg-blue-600 hover:bg-blue-700'
+                      : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                <span>
+                  {currentStageIndex === 2
+                    ? isEtapa3Completa
+                      ? 'Guardar y Avanzar a Etapa 4 (En Espera de OC)'
+                      : 'Completar Etapa 3 y Avanzar a Etapa 4'
+                    : currentStageIndex === 3
+                      ? isEtapa4Completa
+                        ? 'Guardar y Finalizar Adquisición (Etapa 5)'
+                        : 'Guardar Avance en Etapa 4 (En Espera de OC)'
+                      : currentStageIndex === 4
+                        ? 'Guardar Adquisición Finalizada'
+                        : 'Guardar y Avanzar a Siguiente Etapa'}
+                </span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

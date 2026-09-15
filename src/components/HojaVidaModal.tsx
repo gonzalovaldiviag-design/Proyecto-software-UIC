@@ -21,6 +21,7 @@ import {
 import { supabase, type Equipo, type Mantenimiento } from '@/lib/supabase';
 import EstadoBadge from '@/components/EstadoBadge';
 import { getNombreArchivo } from '@/lib/fileUtils';
+import InformeMantenimientoModal from '@/components/InformeMantenimientoModal';
 
 interface HojaVidaModalProps {
   open: boolean;
@@ -73,6 +74,7 @@ export default function HojaVidaModal({ open, onClose, equipo }: HojaVidaModalPr
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [informeMantenimiento, setInformeMantenimiento] = useState<Mantenimiento | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -227,7 +229,20 @@ export default function HojaVidaModal({ open, onClose, equipo }: HojaVidaModalPr
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <p className="font-mono text-xs font-semibold text-blue-600">
-                              {m.codigo}
+                              <button
+                                type="button"
+                                onClick={() => setInformeMantenimiento(m)}
+                                className="group inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-blue-600 hover:bg-blue-50 hover:text-blue-800 transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer text-left"
+                                title={`Ver Informe Técnico Oficial correspondiente a ${m.codigo}`}
+                              >
+                                <FileText className="h-3.5 w-3.5 text-blue-500 group-hover:text-blue-700 transition-colors flex-shrink-0" />
+                                <span className="underline decoration-blue-300 underline-offset-2 group-hover:decoration-blue-700 font-mono">
+                                  {m.codigo}
+                                </span>
+                                <span className="rounded bg-blue-100/80 px-1.5 py-0.5 text-[10px] font-sans font-medium text-blue-700 group-hover:bg-blue-200/90 transition-colors">
+                                  Ver Informe Técnico
+                                </span>
+                              </button>
                             </p>
                             <div className="mt-1 flex flex-wrap items-center gap-2">
                               <p className="text-sm font-semibold text-slate-800">
@@ -325,6 +340,15 @@ export default function HojaVidaModal({ open, onClose, equipo }: HojaVidaModalPr
           </div>
         </div>
       </div>
+
+      {/* Modal de Informe Técnico de Mantenimiento Oficial */}
+      <InformeMantenimientoModal
+        open={informeMantenimiento !== null}
+        onClose={() => setInformeMantenimiento(null)}
+        mantenimiento={informeMantenimiento}
+        equipo={equipo}
+        equipos={equipo ? [equipo] : []}
+      />
     </div>
   );
 }
