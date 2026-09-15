@@ -54,6 +54,25 @@ export interface Mantenimiento {
   diagnostico_final?: string | null;
   repuestos_utilizados?: string | null;
   costo?: number | null;
+  requiere_externalizacion?: boolean | null;
+  tipo_externalizacion?: TipoExternalizacion | null;
+  estado_solicitud_externalizacion?: 'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada' | null;
+  motivo_externalizacion?: string | null;
+  externalizacion_solicitada_por?: string | null;
+  externalizacion_resuelta_por?: string | null;
+  created_at: string;
+}
+
+export interface Notificacion {
+  id: string;
+  destinatario_id?: string | null;
+  destinatario_rol?: RolUsuario | null;
+  titulo: string;
+  mensaje: string;
+  tipo: 'info' | 'alerta' | 'solicitud_externalizacion';
+  leida: boolean;
+  mantenimiento_id?: string | null;
+  codigo_mantenimiento?: string | null;
   created_at: string;
 }
 
@@ -567,6 +586,12 @@ const INITIAL_MANTENIMIENTOS: Mantenimiento[] = [
     accesorios_adicionales: null,
     completado_por: null,
     recibido_por: null,
+    requiere_externalizacion: false,
+    tipo_externalizacion: 'Compra de servicio de mantenimiento o reparación externa',
+    estado_solicitud_externalizacion: 'Pendiente_Aprobacion',
+    motivo_externalizacion: 'Se requiere reparación técnica especializada en laboratorio del fabricante para calibración acústica y conector de transductor lineal.',
+    externalizacion_solicitada_por: 'Téc. Fernando Ruiz',
+    externalizacion_resuelta_por: null,
     created_at: '2026-09-05T14:30:00.000Z',
   },
   {
@@ -701,6 +726,21 @@ export const INITIAL_EXTERNALIZACIONES: Externalizacion[] = [
   },
 ];
 
+export const INITIAL_NOTIFICACIONES: Notificacion[] = [
+  {
+    id: '44444444-4444-4444-8444-444444444401',
+    destinatario_rol: 'Ingeniero Supervisor',
+    destinatario_id: null,
+    titulo: 'Solicitud de Externalización - MANT-002',
+    mensaje: 'El técnico Téc. Fernando Ruiz solicita externalización para la OT MANT-002 (EQ-006 — Ecógrafo Portátil). Motivo: Se requiere reparación técnica especializada en laboratorio del fabricante para calibración acústica y conector de transductor lineal.',
+    tipo: 'solicitud_externalizacion',
+    leida: false,
+    mantenimiento_id: '22222222-2222-4222-8222-222222222202',
+    codigo_mantenimiento: 'MANT-002',
+    created_at: '2026-09-05T14:45:00.000Z',
+  },
+];
+
 type QueryFilter = (row: Record<string, unknown>) => boolean;
 type SortComparator = (a: Record<string, unknown>, b: Record<string, unknown>) => number;
 
@@ -729,6 +769,7 @@ function createMockClient() {
   let mantenimientos: Mantenimiento[] = getStored<Mantenimiento[]>('mantenimientos', INITIAL_MANTENIMIENTOS);
   let fallas: FallaMantenimiento[] = getStored<FallaMantenimiento[]>('fallas', []);
   let externalizaciones: Externalizacion[] = getStored<Externalizacion[]>('externalizaciones', INITIAL_EXTERNALIZACIONES);
+  let notificaciones: Notificacion[] = getStored<Notificacion[]>('notificaciones', INITIAL_NOTIFICACIONES);
   let perfiles: PerfilUsuario[] = getStored<PerfilUsuario[]>('perfiles', INITIAL_PERFILES).map((p) => {
     if (p.rol === 'Ingeniero de Servicio / Técnico' && p.permisos?.crear_solicitud_ot) {
       return {
@@ -811,6 +852,10 @@ function createMockClient() {
                 else if (tableName === 'mantenimientos') dataset = [...(mantenimientos as unknown as Record<string, unknown>[])];
                 else if (tableName === 'fallas_mantenimiento') dataset = [...(fallas as unknown as Record<string, unknown>[])];
                 else if (tableName === 'externalizaciones') dataset = [...(externalizaciones as unknown as Record<string, unknown>[])];
+                else if (tableName === 'notificaciones') {
+                  notificaciones = getStored<Notificacion[]>('notificaciones', notificaciones);
+                  dataset = [...(notificaciones as unknown as Record<string, unknown>[])];
+                }
                 else if (tableName === 'perfiles') {
                   perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
                   dataset = [...(perfiles as unknown as Record<string, unknown>[])];
@@ -835,7 +880,7 @@ function createMockClient() {
           return queryBuilder;
         },
 
-        async insert(payload: Record<string, unknown> | Record<string, unknown>[]) {
+        insert(payload: Record<string, unknown> | Record<string, unknown>[]) {
           const items = Array.isArray(payload) ? payload : [payload];
           const created: Record<string, unknown>[] = [];
 
@@ -864,6 +909,10 @@ function createMockClient() {
             } else if (tableName === 'externalizaciones') {
               externalizaciones = [newItem as unknown as Externalizacion, ...externalizaciones];
               setStored('externalizaciones', externalizaciones);
+            } else if (tableName === 'notificaciones') {
+              notificaciones = getStored<Notificacion[]>('notificaciones', notificaciones);
+              notificaciones = [newItem as unknown as Notificacion, ...notificaciones];
+              setStored('notificaciones', notificaciones);
             } else if (tableName === 'perfiles') {
               perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
               perfiles = [newItem as unknown as PerfilUsuario, ...perfiles];
@@ -872,45 +921,95 @@ function createMockClient() {
             created.push(newItem);
           }
 
-          return { data: Array.isArray(payload) ? created : created[0], error: null };
+          const response = { data: created, error: null };
+          return {
+            ...response,
+            select() {
+              return Promise.resolve(response);
+            },
+            then<TResult1 = typeof response, TResult2 = never>(
+              onfulfilled?: ((value: typeof response) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+            ) {
+              return Promise.resolve(response).then(onfulfilled, onrejected);
+            },
+          };
         },
 
         update(updates: Record<string, unknown>) {
           return {
             eq(column: string, value: unknown) {
-              return (async () => {
-                if (tableName === 'equipos') {
-                  equipos = equipos.map((eq) =>
-                    (eq as unknown as Record<string, unknown>)[column] === value
-                      ? ({ ...eq, ...updates } as unknown as Equipo)
-                      : eq
-                  );
-                  setStored('equipos', equipos);
-                } else if (tableName === 'mantenimientos') {
-                  mantenimientos = mantenimientos.map((m) =>
-                    (m as unknown as Record<string, unknown>)[column] === value
-                      ? ({ ...m, ...updates } as unknown as Mantenimiento)
-                      : m
-                  );
-                  setStored('mantenimientos', mantenimientos);
-                } else if (tableName === 'externalizaciones') {
-                  externalizaciones = externalizaciones.map((ext) =>
-                    (ext as unknown as Record<string, unknown>)[column] === value
-                      ? ({ ...ext, ...updates, updated_at: new Date().toISOString() } as unknown as Externalizacion)
-                      : ext
-                  );
-                  setStored('externalizaciones', externalizaciones);
-                } else if (tableName === 'perfiles') {
-                  perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
-                  perfiles = perfiles.map((p) =>
-                    (p as unknown as Record<string, unknown>)[column] === value
-                      ? ({ ...p, ...updates } as unknown as PerfilUsuario)
-                      : p
-                  );
-                  setStored('perfiles', perfiles);
-                }
-                return { data: null, error: null };
-              })();
+              const updatedRows: Record<string, unknown>[] = [];
+              if (tableName === 'equipos') {
+                equipos = equipos.map((eq) => {
+                  if ((eq as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...eq, ...updates } as unknown as Equipo;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return eq;
+                });
+                setStored('equipos', equipos);
+              } else if (tableName === 'mantenimientos') {
+                mantenimientos = mantenimientos.map((m) => {
+                  if ((m as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...m, ...updates } as unknown as Mantenimiento;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return m;
+                });
+                setStored('mantenimientos', mantenimientos);
+              } else if (tableName === 'externalizaciones') {
+                externalizaciones = externalizaciones.map((ext) => {
+                  if ((ext as unknown as Record<string, unknown>)[column] === value) {
+                    const row = {
+                      ...ext,
+                      ...updates,
+                      updated_at: new Date().toISOString(),
+                    } as unknown as Externalizacion;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return ext;
+                });
+                setStored('externalizaciones', externalizaciones);
+              } else if (tableName === 'notificaciones') {
+                notificaciones = getStored<Notificacion[]>('notificaciones', notificaciones);
+                notificaciones = notificaciones.map((n) => {
+                  if ((n as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...n, ...updates } as unknown as Notificacion;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return n;
+                });
+                setStored('notificaciones', notificaciones);
+              } else if (tableName === 'perfiles') {
+                perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
+                perfiles = perfiles.map((p) => {
+                  if ((p as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...p, ...updates } as unknown as PerfilUsuario;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return p;
+                });
+                setStored('perfiles', perfiles);
+              }
+              const response = { data: updatedRows, error: null };
+              return {
+                ...response,
+                select() {
+                  return Promise.resolve(response);
+                },
+                then<TResult1 = typeof response, TResult2 = never>(
+                  onfulfilled?: ((value: typeof response) => TResult1 | PromiseLike<TResult1>) | null,
+                  onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+                ) {
+                  return Promise.resolve(response).then(onfulfilled, onrejected);
+                },
+              };
             },
           };
         },
@@ -939,6 +1038,12 @@ function createMockClient() {
                     (ext) => (ext as unknown as Record<string, unknown>)[column] !== value
                   );
                   setStored('externalizaciones', externalizaciones);
+                } else if (tableName === 'notificaciones') {
+                  notificaciones = getStored<Notificacion[]>('notificaciones', notificaciones);
+                  notificaciones = notificaciones.filter(
+                    (n) => (n as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('notificaciones', notificaciones);
                 } else if (tableName === 'perfiles') {
                   perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
                   perfiles = perfiles.filter(

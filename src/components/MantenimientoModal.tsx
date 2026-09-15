@@ -18,6 +18,9 @@ import {
   Search,
   ChevronDown,
   Check,
+  Clock,
+  Send,
+  Bell,
 } from 'lucide-react';
 import {
   supabase,
@@ -34,6 +37,9 @@ import {
   guardarExternalizacionParaMantenimiento,
   TIPOS_EXTERNALIZACION,
 } from '@/lib/externalizacionStorage';
+import {
+  saveMantenimientoRecord,
+} from '@/lib/mantenimientoStorage';
 import {
   getNombreArchivo,
   compressImageToDataUrl,
@@ -66,12 +72,16 @@ export interface MantenimientoFormData {
   costo?: number | null;
   requiere_externalizacion?: boolean;
   tipo_externalizacion?: TipoExternalizacion;
+  estado_solicitud_externalizacion?: 'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada' | null;
+  motivo_externalizacion?: string | null;
+  externalizacion_solicitada_por?: string | null;
+  externalizacion_resuelta_por?: string | null;
 }
 
 interface MantenimientoModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (data: MantenimientoFormData) => void;
+  onSave: (data: MantenimientoFormData) => void | Promise<unknown>;
   equipos: Equipo[];
   equipoPreseleccionado?: Equipo | null;
   mantenimientoEdicion?: Mantenimiento | null;
@@ -170,11 +180,32 @@ export default function MantenimientoModal({
     'Compra de repuesto por Informe de requerimiento'
   );
   const [externalizacionVinculada, setExternalizacionVinculada] = useState<Externalizacion | null>(null);
+  const [estadoSolicitudExternalizacion, setEstadoSolicitudExternalizacion] = useState<
+    'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada' | null
+  >(null);
+  const [motivoExternalizacion, setMotivoExternalizacion] = useState('');
+  const [externalizacionSolicitadaPor, setExternalizacionSolicitadaPor] = useState('');
+  const [externalizacionResueltaPor, setExternalizacionResueltaPor] = useState('');
+
+  // Modal de Justificación Técnica
+  const [modalJustificacionOpen, setModalJustificacionOpen] = useState(false);
+  const [motivoInput, setMotivoInput] = useState('');
+  const [tipoExtInput, setTipoExtInput] = useState<TipoExternalizacion>(
+    'Compra de repuesto por Informe de requerimiento'
+  );
+  const [justificacionError, setJustificacionError] = useState('');
+  const [solicitudEnviadaAviso, setSolicitudEnviadaAviso] = useState<string | null>(null);
+
+  // Modal y estado de Resolución de Supervisor (Aprobación / Rechazo)
+  const [modalRechazoOpen, setModalRechazoOpen] = useState(false);
+  const [motivoRechazoInput, setMotivoRechazoInput] = useState('');
+  const [procesandoAccionSupervisor, setProcesandoAccionSupervisor] = useState(false);
 
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [storageNotice, setStorageNotice] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  const [guardando, setGuardando] = useState(false);
   const asignadoInputRef = useRef<HTMLButtonElement>(null);
   const [asignadoDropdownOpen, setAsignadoDropdownOpen] = useState(false);
   const [asignadoBusqueda, setAsignadoBusqueda] = useState('');
@@ -281,6 +312,12 @@ export default function MantenimientoModal({
         setRecibidoPor(mantenimientoEdicion.recibido_por ?? '');
         setNumeroInforme(mantenimientoEdicion.numero_informe ?? null);
         setFechaEmisionInforme(mantenimientoEdicion.fecha_emision_informe ?? null);
+        setEstadoSolicitudExternalizacion(mantenimientoEdicion.estado_solicitud_externalizacion ?? null);
+        setMotivoExternalizacion(mantenimientoEdicion.motivo_externalizacion ?? '');
+        setExternalizacionSolicitadaPor(mantenimientoEdicion.externalizacion_solicitada_por ?? '');
+        setExternalizacionResueltaPor(mantenimientoEdicion.externalizacion_resuelta_por ?? '');
+        setSolicitudEnviadaAviso(null);
+        setJustificacionError('');
 
         // Cargar externalización vinculada
         findExternalizacionByMantenimiento(
@@ -293,13 +330,16 @@ export default function MantenimientoModal({
               setTipoExternalizacion(ext.tipo);
               setExternalizacionVinculada(ext);
             } else {
-              setRequiereExternalizacion(false);
-              setTipoExternalizacion('Compra de repuesto por Informe de requerimiento');
+              const req = Boolean(mantenimientoEdicion.requiere_externalizacion);
+              setRequiereExternalizacion(req);
+              if (mantenimientoEdicion.tipo_externalizacion) {
+                setTipoExternalizacion(mantenimientoEdicion.tipo_externalizacion);
+              }
               setExternalizacionVinculada(null);
             }
           })
           .catch(() => {
-            setRequiereExternalizacion(false);
+            setRequiereExternalizacion(Boolean(mantenimientoEdicion.requiere_externalizacion));
             setExternalizacionVinculada(null);
           });
       } else {
@@ -334,6 +374,12 @@ export default function MantenimientoModal({
         setRequiereExternalizacion(false);
         setTipoExternalizacion('Compra de repuesto por Informe de requerimiento');
         setExternalizacionVinculada(null);
+        setEstadoSolicitudExternalizacion(null);
+        setMotivoExternalizacion('');
+        setExternalizacionSolicitadaPor('');
+        setExternalizacionResueltaPor('');
+        setSolicitudEnviadaAviso(null);
+        setJustificacionError('');
       }
     }
   }, [open, equipos, equipoPreseleccionado, mantenimientoEdicion, solicitanteSesionActiva, esRolTecnico, usuarioActivo]);
@@ -561,7 +607,7 @@ export default function MantenimientoModal({
     setDocumentosUrls((prev) => prev.filter((u) => u !== url));
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTouched(true);
 
@@ -649,46 +695,213 @@ export default function MantenimientoModal({
         ? ((fechaCierre || '').trim() || new Date().toISOString().slice(0, 10))
         : ((fechaCierre || '').trim() || null);
 
-    onSave({
-      equipo_id: finalEquipoId,
-      equipo_identificacion: finalEquipoIdentificacion,
-      problema_reportado: finalProblema,
-      solicitado_por: (solicitadoPor || '').trim(),
-      asignado_a: finalAsignadoA,
-      fecha_requerimiento: fecha,
-      tipo_mantenimiento: finalTipo,
-      estado_mantenimiento: finalEstado,
-      descripcion_trabajo_realizado: (descripcionTrabajo || '').trim() || null,
-      fecha_cierre: finalFechaCierre,
-      horas_hombre: (horasHombre || '').trim() === '' ? null : Number(horasHombre),
-      fotos_url: fotosUrls.length > 0 ? fotosUrls : null,
-      documentos_url: documentosUrls.length > 0 ? documentosUrls : null,
-      accesorios_adicionales: (accesoriosAdicionales || '').trim() || null,
-      completado_por: (completadoPor || '').trim() || null,
-      recibido_por: (recibidoPor || '').trim() || null,
-      diagnostico_final: (diagnosticoFinal || '').trim() || null,
-      repuestos_utilizados: (repuestosUtilizados || '').trim() || null,
-      costo: (costo || '').trim() === '' ? null : Number(costo),
-      numero_informe: finalNumeroInforme,
-      fecha_emision_informe: finalFechaEmisionInforme,
-      requiere_externalizacion: requiereExternalizacion,
-      tipo_externalizacion: tipoExternalizacion,
-    });
-
-    if (requiereExternalizacion) {
-      guardarExternalizacionParaMantenimiento({
-        mantId: mantenimientoEdicion?.id || null,
-        mantCodigo: mantenimientoEdicion?.codigo || null,
-        tipo: tipoExternalizacion,
-        descripcion: (problema || '').trim() || 'Compra de repuesto o servicio externo derivado de OT.',
-        equipoIdentificacion: (identificacion || '').trim(),
-        equipoId: modoEquipo === 'registrado' ? equipoId || null : null,
-        solicitante: (solicitadoPor || '').trim(),
-      }).catch((extErr) => {
-        console.warn('Error sincronizando externalización vinculada:', extErr);
+    try {
+      setGuardando(true);
+      await onSave({
+        equipo_id: finalEquipoId,
+        equipo_identificacion: finalEquipoIdentificacion,
+        problema_reportado: finalProblema,
+        solicitado_por: (solicitadoPor || '').trim(),
+        asignado_a: finalAsignadoA,
+        fecha_requerimiento: fecha,
+        tipo_mantenimiento: finalTipo,
+        estado_mantenimiento: finalEstado,
+        descripcion_trabajo_realizado: (descripcionTrabajo || '').trim() || null,
+        fecha_cierre: finalFechaCierre,
+        horas_hombre: (horasHombre || '').trim() === '' ? null : Number(horasHombre),
+        fotos_url: fotosUrls.length > 0 ? fotosUrls : null,
+        documentos_url: documentosUrls.length > 0 ? documentosUrls : null,
+        accesorios_adicionales: (accesoriosAdicionales || '').trim() || null,
+        completado_por: (completadoPor || '').trim() || null,
+        recibido_por: (recibidoPor || '').trim() || null,
+        diagnostico_final: (diagnosticoFinal || '').trim() || null,
+        repuestos_utilizados: (repuestosUtilizados || '').trim() || null,
+        costo: (costo || '').trim() === '' ? null : Number(costo),
+        numero_informe: finalNumeroInforme,
+        fecha_emision_informe: finalFechaEmisionInforme,
+        requiere_externalizacion: requiereExternalizacion,
+        tipo_externalizacion: tipoExternalizacion,
+        estado_solicitud_externalizacion: estadoSolicitudExternalizacion,
+        motivo_externalizacion: (motivoExternalizacion || '').trim() || null,
+        externalizacion_solicitada_por: (externalizacionSolicitadaPor || '').trim() || null,
+        externalizacion_resuelta_por: (externalizacionResueltaPor || '').trim() || null,
       });
+
+      if (requiereExternalizacion && estadoSolicitudExternalizacion !== 'Rechazada') {
+        await guardarExternalizacionParaMantenimiento({
+          mantId: mantenimientoEdicion?.id || null,
+          mantCodigo: mantenimientoEdicion?.codigo || null,
+          tipo: tipoExternalizacion,
+          descripcion: (problema || '').trim() || 'Compra de repuesto o servicio externo derivado de OT.',
+          equipoIdentificacion: (identificacion || '').trim(),
+          equipoId: modoEquipo === 'registrado' ? equipoId || null : null,
+          solicitante: (solicitadoPor || '').trim(),
+        }).catch((extErr) => {
+          console.warn('Error sincronizando externalización vinculada:', extErr);
+        });
+      }
+
+      // Si se envió una solicitud de externalización pendiente, crear notificación para supervisores
+      if (estadoSolicitudExternalizacion === 'Pendiente_Aprobacion') {
+        try {
+          await supabase.from('notificaciones').insert({
+            destinatario_rol: 'Ingeniero Supervisor',
+            destinatario_id: null,
+            titulo: `Solicitud de Externalización — ${mantenimientoEdicion?.codigo || 'Nueva OT'}`,
+            mensaje: `El técnico ${externalizacionSolicitadaPor || usuarioActivo?.nombre || 'Técnico'} solicita externalización para la OT ${mantenimientoEdicion?.codigo || ''} (${finalEquipoIdentificacion}).\nModalidad: ${tipoExternalizacion}.\nMotivo: ${(motivoExternalizacion || '').trim() || finalProblema}`,
+            tipo: 'solicitud_externalizacion',
+            leida: false,
+            mantenimiento_id: mantenimientoEdicion?.id || null,
+            codigo_mantenimiento: mantenimientoEdicion?.codigo || null,
+          });
+          window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        } catch (notifErr) {
+          console.warn('Error creando notificación de externalización:', notifErr);
+        }
+      }
+
+      // Si el supervisor aprobó o rechazó una solicitud previa del técnico
+      if (
+        mantenimientoEdicion &&
+        mantenimientoEdicion.estado_solicitud_externalizacion === 'Pendiente_Aprobacion' &&
+        (estadoSolicitudExternalizacion === 'Aprobada' || estadoSolicitudExternalizacion === 'Rechazada')
+      ) {
+        try {
+          await supabase.from('notificaciones').insert({
+            destinatario_rol: 'Ingeniero de Servicio / Técnico',
+            destinatario_id: null,
+            titulo: `Externalización ${estadoSolicitudExternalizacion === 'Aprobada' ? 'Aprobada' : 'Rechazada'} — ${mantenimientoEdicion.codigo}`,
+            mensaje: `El supervisor ${usuarioActivo?.nombre} ha ${estadoSolicitudExternalizacion === 'Aprobada' ? 'APROBADO' : 'RECHAZADO'} la solicitud de externalización para la OT ${mantenimientoEdicion.codigo} (${finalEquipoIdentificacion}).`,
+            tipo: estadoSolicitudExternalizacion === 'Aprobada' ? 'info' : 'alerta',
+            leida: false,
+            mantenimiento_id: mantenimientoEdicion.id,
+            codigo_mantenimiento: mantenimientoEdicion.codigo,
+          });
+          window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        } catch (notifErr) {
+          console.warn('Error notificando resolución al técnico:', notifErr);
+        }
+      }
+    } catch (saveErr) {
+      console.error('Error al procesar guardado en modal:', saveErr);
+    } finally {
+      setGuardando(false);
     }
   };
+
+  const currentEquipoIdentificacion =
+    mantenimientoEdicion?.equipo_identificacion ||
+    (modoEquipo === 'registrado' && equipoSeleccionado
+      ? `${equipoSeleccionado.nombre} (${equipoSeleccionado.codigo_institucional})`
+      : equipoManual.trim() || 'Equipo Clínico');
+
+  async function handleConfirmarRechazoSupervisor() {
+    setProcesandoAccionSupervisor(true);
+    try {
+      const motivoRechazoFinal =
+        motivoRechazoInput.trim() ||
+        'La orden debe ser atendida con insumos y capacidades locales de la unidad técnica.';
+
+      setEstadoSolicitudExternalizacion('Rechazada');
+      setRequiereExternalizacion(false);
+      setExternalizacionResueltaPor(usuarioActivo?.nombre || 'Supervisor');
+      setMotivoExternalizacion(motivoRechazoFinal);
+
+      if (mantenimientoEdicion?.id) {
+        await saveMantenimientoRecord({
+          id: mantenimientoEdicion.id,
+          codigo: mantenimientoEdicion.codigo,
+          isEdit: true,
+          payload: {
+            ...mantenimientoEdicion,
+            requiere_externalizacion: false,
+            estado_solicitud_externalizacion: 'Rechazada',
+            externalizacion_resuelta_por: usuarioActivo?.nombre || 'Supervisor',
+            motivo_externalizacion: motivoRechazoFinal,
+          },
+        });
+
+        await supabase.from('notificaciones').insert({
+          destinatario_rol: 'Ingeniero de Servicio / Técnico',
+          destinatario_id: null,
+          titulo: `Externalización Rechazada — ${mantenimientoEdicion.codigo}`,
+          mensaje: `El Supervisor ${usuarioActivo?.nombre || 'Supervisor'} ha RECHAZADO la solicitud de externalización para la OT ${mantenimientoEdicion.codigo} (${currentEquipoIdentificacion}). Motivo: ${motivoRechazoFinal}`,
+          tipo: 'alerta',
+          leida: false,
+          mantenimiento_id: mantenimientoEdicion.id,
+          codigo_mantenimiento: mantenimientoEdicion.codigo,
+        });
+
+        window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        window.dispatchEvent(new CustomEvent('mantenimientos_updated'));
+      }
+
+      setSolicitudEnviadaAviso(
+        'Solicitud de externalización rechazada. Se informó la resolución al técnico de servicio.'
+      );
+      setModalRechazoOpen(false);
+    } catch (err) {
+      console.error('Error al rechazar solicitud:', err);
+    } finally {
+      setProcesandoAccionSupervisor(false);
+    }
+  }
+
+  async function handleAutorizarSupervisor() {
+    setProcesandoAccionSupervisor(true);
+    try {
+      setEstadoSolicitudExternalizacion('Aprobada');
+      setRequiereExternalizacion(true);
+      setExternalizacionResueltaPor(usuarioActivo?.nombre || 'Supervisor');
+
+      if (mantenimientoEdicion?.id) {
+        await saveMantenimientoRecord({
+          id: mantenimientoEdicion.id,
+          codigo: mantenimientoEdicion.codigo,
+          isEdit: true,
+          payload: {
+            ...mantenimientoEdicion,
+            requiere_externalizacion: true,
+            tipo_externalizacion: tipoExternalizacion,
+            estado_solicitud_externalizacion: 'Aprobada',
+            externalizacion_resuelta_por: usuarioActivo?.nombre || 'Supervisor',
+          },
+        });
+
+        await guardarExternalizacionParaMantenimiento({
+          mantId: mantenimientoEdicion.id,
+          mantCodigo: mantenimientoEdicion.codigo,
+          tipo: tipoExternalizacion,
+          descripcion: `Externalización Aprobada por ${usuarioActivo?.nombre || 'Supervisor'}. Justificación: ${motivoExternalizacion || mantenimientoEdicion.problema_reportado}`,
+          equipoIdentificacion: currentEquipoIdentificacion,
+          equipoId: mantenimientoEdicion.equipo_id || null,
+          solicitante: externalizacionSolicitadaPor || mantenimientoEdicion.solicitado_por || usuarioActivo?.nombre,
+        });
+
+        await supabase.from('notificaciones').insert({
+          destinatario_rol: 'Ingeniero de Servicio / Técnico',
+          destinatario_id: null,
+          titulo: `Externalización Aprobada — ${mantenimientoEdicion.codigo}`,
+          mensaje: `El Supervisor ${usuarioActivo?.nombre || 'Supervisor'} ha APROBADO la externalización para la OT ${mantenimientoEdicion.codigo} (${currentEquipoIdentificacion}). Se derivó a Adquisiciones para gestión de compra.`,
+          tipo: 'info',
+          leida: false,
+          mantenimiento_id: mantenimientoEdicion.id,
+          codigo_mantenimiento: mantenimientoEdicion.codigo,
+        });
+
+        window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        window.dispatchEvent(new CustomEvent('mantenimientos_updated'));
+      }
+
+      setSolicitudEnviadaAviso(
+        '¡Solicitud autorizada exitosamente! Se habilitó la compra externa y se notificó al técnico.'
+      );
+    } catch (err) {
+      console.error('Error al autorizar externalización:', err);
+    } finally {
+      setProcesandoAccionSupervisor(false);
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1193,47 +1406,304 @@ export default function MantenimientoModal({
             </div>
           </div>
 
-          {/* SECCIÓN EXTERNALIZACIÓN / COMPRA EXTERNA (LÍNEA A) */}
+          {/* SECCIÓN EXTERNALIZACIÓN / COMPRA EXTERNA (FLUJO DE APROBACIÓN TÉCNICO - SUPERVISOR) */}
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 transition-all">
+            {solicitudEnviadaAviso && (
+              <div className="mb-3 flex items-center justify-between rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                  <span>{solicitudEnviadaAviso}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSolicitudEnviadaAviso(null)}
+                  className="text-emerald-700 hover:text-emerald-950 text-sm font-bold"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700 flex-shrink-0">
                   <ShoppingBag className="h-4 w-4" />
                 </div>
                 <div>
-                  <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <div className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-wrap">
                     <span>Requiere Externalización / Compra Externa</span>
                     {requiereExternalizacion && externalizacionBloqueaCierre && (
                       <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
                         <Lock className="h-3 w-3" /> Bloquea Cierre
                       </span>
                     )}
+                    {estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' && (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900 border border-amber-300">
+                        <Clock className="h-3 w-3 text-amber-600 animate-pulse" />
+                        <span>Pendiente V°B° Supervisor</span>
+                      </span>
+                    )}
+                    {estadoSolicitudExternalizacion === 'Aprobada' && (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-900 border border-emerald-300">
+                        <Check className="h-3 w-3 text-emerald-600" />
+                        <span>V°B° Aprobado</span>
+                      </span>
+                    )}
+                    {estadoSolicitudExternalizacion === 'Rechazada' && (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-900 border border-rose-300">
+                        <X className="h-3 w-3 text-rose-600" />
+                        <span>Rechazada</span>
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-slate-500">
-                    Activar si esta OT requiere compra de repuestos clínicos o contratación de servicio tercerizado
+                    {esRolTecnico
+                      ? 'Los técnicos deben justificar y solicitar autorización al Ingeniero Supervisor para compras o derivaciones.'
+                      : 'Activar si esta OT requiere compra de repuestos clínicos o contratación de servicio tercerizado.'}
                   </div>
                 </div>
               </div>
 
-              {/* Conmutador Switch */}
-              <label className="relative inline-flex cursor-pointer items-center flex-shrink-0">
-                <input
-                  type="checkbox"
-                  checked={requiereExternalizacion}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setRequiereExternalizacion(checked);
-                    setEstadoError('');
-                  }}
-                  className="peer sr-only"
-                />
-                <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-blue-500/20" />
-                <span className="ml-2 text-xs font-semibold text-slate-700 min-w-[50px]">
-                  {requiereExternalizacion ? 'Sí' : 'No'}
-                </span>
-              </label>
+              {/* Botón o Conmutador dependiente del perfil */}
+              {esRolTecnico ? (
+                <div>
+                  {estadoSolicitudExternalizacion === 'Aprobada' ? (
+                    <label className="relative inline-flex cursor-pointer items-center flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={requiereExternalizacion}
+                        onChange={(e) => {
+                          setRequiereExternalizacion(e.target.checked);
+                          setEstadoError('');
+                        }}
+                        className="peer sr-only"
+                      />
+                      <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-emerald-600 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-emerald-500/20" />
+                      <span className="ml-2 text-xs font-semibold text-slate-700 min-w-[30px]">
+                        {requiereExternalizacion ? 'Sí' : 'No'}
+                      </span>
+                    </label>
+                  ) : estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMotivoInput(motivoExternalizacion || '');
+                        setTipoExtInput(tipoExternalizacion);
+                        setModalJustificacionOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-100/70 px-2.5 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-200/70 transition shadow-2xs"
+                    >
+                      <Clock className="h-3.5 w-3.5 text-amber-600" />
+                      <span>Ver Solicitud</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMotivoInput(motivoExternalizacion || '');
+                        setTipoExtInput(tipoExternalizacion);
+                        setModalJustificacionOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50 transition shadow-2xs active:scale-95"
+                    >
+                      <Send className="h-3.5 w-3.5 text-blue-600" />
+                      <span>Solicitar a Supervisor</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                /* Para Supervisor o Administrador: Conmutador directo */
+                <label className="relative inline-flex cursor-pointer items-center flex-shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={requiereExternalizacion}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setRequiereExternalizacion(checked);
+                      setEstadoError('');
+                      if (checked && estadoSolicitudExternalizacion !== 'Aprobada') {
+                        setEstadoSolicitudExternalizacion('Aprobada');
+                        setExternalizacionResueltaPor(usuarioActivo?.nombre || 'Supervisor');
+                      }
+                    }}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-blue-500/20" />
+                  <span className="ml-2 text-xs font-semibold text-slate-700 min-w-[30px]">
+                    {requiereExternalizacion ? 'Sí' : 'No'}
+                  </span>
+                </label>
+              )}
             </div>
 
+            {/* Tarjeta de Aprobación para Supervisor cuando la solicitud está pendiente */}
+            {(esSupervisor || esAdmin) && estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' && (
+              <div className="mt-4 rounded-xl border-2 border-amber-300 bg-amber-50/90 p-4 text-xs shadow-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 font-bold text-amber-950">
+                    <Bell className="h-4 w-4 text-amber-600 animate-bounce flex-shrink-0" />
+                    <span>Solicitud de Externalización del Técnico ({externalizacionSolicitadaPor || 'Técnico'})</span>
+                  </div>
+                  <span className="rounded-md bg-amber-200 px-2 py-0.5 text-[10px] font-black text-amber-900 uppercase">
+                    Visto Bueno Requerido
+                  </span>
+                </div>
+                <div className="mt-2.5 rounded-lg border border-amber-200/80 bg-white/90 p-3 space-y-1.5 text-amber-950">
+                  <p>
+                    <strong>Modalidad sugerida:</strong> {tipoExternalizacion}
+                  </p>
+                  <p>
+                    <strong>Justificación Técnica del Técnico:</strong>
+                  </p>
+                  <p className="rounded bg-amber-50/60 p-2 italic text-slate-800 border border-amber-200/60">
+                    "{motivoExternalizacion || 'Sin justificación detallada'}"
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Solicitada por <strong>{externalizacionSolicitadaPor || 'Técnico'}</strong>
+                  </p>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-200">
+                  <span className="text-[11px] font-medium text-amber-900">
+                    Acción de Jefatura / Supervisión:
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      id="btn-rechazar-solicitud-ext"
+                      type="button"
+                      disabled={procesandoAccionSupervisor}
+                      onClick={() => {
+                        setMotivoRechazoInput(
+                          'La orden debe ser atendida con insumos y capacidades locales de la unidad técnica.'
+                        );
+                        setModalRechazoOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 transition active:scale-95 shadow-2xs disabled:opacity-50"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      <span>Rechazar Solicitud</span>
+                    </button>
+                    <button
+                      id="btn-autorizar-solicitud-ext"
+                      type="button"
+                      disabled={procesandoAccionSupervisor}
+                      onClick={handleAutorizarSupervisor}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 transition active:scale-95 disabled:opacity-50"
+                    >
+                      {procesandoAccionSupervisor ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
+                      <span>Autorizar Externalización</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Tarjeta Informativa para el Técnico en estado Pendiente */}
+            {esRolTecnico && estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' && (
+              <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/80 p-3 text-xs text-amber-950">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                    <Clock className="h-4 w-4 text-amber-600 animate-pulse flex-shrink-0" />
+                    <span>Externalización: Solicitud Pendiente de Aprobación</span>
+                  </div>
+                  <span className="font-semibold text-amber-800 text-[11px]">
+                    En bandeja de supervisor
+                  </span>
+                </div>
+                <div className="mt-2 space-y-1 text-slate-700">
+                  <p><strong>Modalidad solicitada:</strong> {tipoExternalizacion}</p>
+                  <p><strong>Justificación ingresada:</strong> "{motivoExternalizacion}"</p>
+                  <p className="text-[11px] text-amber-800 mt-1">
+                    La compra externa y la sincronización con adquisiciones se habilitarán una vez que el Ingeniero Supervisor apruebe tu requerimiento.
+                  </p>
+                </div>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMotivoInput(motivoExternalizacion || '');
+                      setTipoExtInput(tipoExternalizacion);
+                      setModalJustificacionOpen(true);
+                    }}
+                    className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                  >
+                    Editar Justificación
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEstadoSolicitudExternalizacion(null);
+                      setMotivoExternalizacion('');
+                      setRequiereExternalizacion(false);
+                      setSolicitudEnviadaAviso('Solicitud de externalización desestimada.');
+                    }}
+                    className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+                  >
+                    Cancelar Solicitud
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Tarjeta de Aprobación Existente */}
+            {estadoSolicitudExternalizacion === 'Aprobada' && (
+              <div className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50/80 p-3 text-xs text-emerald-950">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-900">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Externalización Autorizada por {externalizacionResueltaPor || 'Supervisión'}</span>
+                  </div>
+                  <span className="font-mono font-bold text-emerald-800 bg-emerald-200/80 px-2 py-0.5 rounded text-[10px]">
+                    Visto Bueno Concedido
+                  </span>
+                </div>
+                {motivoExternalizacion && (
+                  <p className="mt-1 text-emerald-800">
+                    <strong>Justificación técnica:</strong> {motivoExternalizacion}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Tarjeta de Rechazo Existente */}
+            {estadoSolicitudExternalizacion === 'Rechazada' && (
+              <div className="mt-3 rounded-xl border border-rose-300 bg-rose-50/80 p-3 text-xs text-rose-950">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-rose-900">
+                    <AlertTriangle className="h-4 w-4 text-rose-600 flex-shrink-0" />
+                    <span>Solicitud de Externalización Rechazada ({externalizacionResueltaPor || 'Supervisión'})</span>
+                  </div>
+                  <span className="font-mono font-bold text-rose-800 bg-rose-200/80 px-2 py-0.5 rounded text-[10px]">
+                    No Autorizada
+                  </span>
+                </div>
+                {motivoExternalizacion && (
+                  <p className="mt-1 text-rose-800">
+                    <strong>Motivo evaluado:</strong> {motivoExternalizacion}
+                  </p>
+                )}
+                {esRolTecnico && (
+                  <div className="mt-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMotivoInput(motivoExternalizacion || '');
+                        setTipoExtInput(tipoExternalizacion);
+                        setModalJustificacionOpen(true);
+                      }}
+                      className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100/60 shadow-2xs transition"
+                    >
+                      Reingresar Solicitud con Nueva Justificación
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Campos de configuración cuando requiereExternalizacion es TRUE */}
             {requiereExternalizacion && (
               <div className="mt-4 space-y-3 pt-3 border-t border-slate-200">
                 <div>
@@ -1300,7 +1770,7 @@ export default function MantenimientoModal({
                       <span>Sincronización Automática con Módulo de Seguimiento</span>
                     </div>
                     <p className="mt-0.5 text-blue-700 leading-relaxed">
-                      Al guardar esta OT, se generará de inmediato el registro en el módulo <strong>Externalización y Compras</strong> vinculado a este equipo y solicitante. El cierre técnico quedará condicionado a la recepción conforme de la compra.
+                      Al guardar esta OT con externalización activa, se generará de inmediato el registro en el módulo <strong>Externalización y Compras</strong> vinculado a este equipo y solicitante. El cierre técnico quedará condicionado a la recepción conforme de la compra.
                     </p>
                   </div>
                 )}
@@ -1822,11 +2292,12 @@ export default function MantenimientoModal({
             <button
               type="submit"
               disabled={
+                guardando ||
                 (estado === 'Completado' && !cierreValido) ||
                 (!esEdicion && !puede('crear_solicitud_ot'))
               }
               className={`inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold shadow-sm transition-all active:scale-[0.98] ${
-                (!esEdicion && !puede('crear_solicitud_ot'))
+                guardando || (!esEdicion && !puede('crear_solicitud_ot'))
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
                   : estado === 'Completado'
                     ? cierreValido
@@ -1835,7 +2306,12 @@ export default function MantenimientoModal({
                     : 'bg-blue-600 text-white hover:bg-blue-700'
               }`}
             >
-              {estado === 'Completado' ? (
+              {guardando ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Guardando...</span>
+                </>
+              ) : estado === 'Completado' ? (
                 <>
                   <FileText className="h-4 w-4" />
                   <span>
@@ -1853,6 +2329,195 @@ export default function MantenimientoModal({
           </div>
         </form>
       </div>
+
+      {/* DIÁLOGO / MODAL DE JUSTIFICACIÓN TÉCNICA DE EXTERNALIZACIÓN */}
+      {modalJustificacionOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-slate-900/10">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                  <Send className="h-4 w-4" />
+                </div>
+                <span>Solicitud Técnica de Externalización</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalJustificacionOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-500 leading-relaxed">
+              Como Técnico de Servicio, la compra de repuestos o tercerización externa requiere el visto bueno formal del Ingeniero Supervisor. Por favor justifica técnicamente la necesidad.
+            </p>
+
+            {justificacionError && (
+              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700 font-medium">
+                {justificacionError}
+              </div>
+            )}
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Modalidad de Adquisición Solicitada <span className="text-rose-500">*</span>
+                </label>
+                <div className="space-y-1.5">
+                  {TIPOS_EXTERNALIZACION.map((tipo) => (
+                    <label
+                      key={tipo}
+                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs cursor-pointer transition ${
+                        tipoExtInput === tipo
+                          ? 'border-blue-500 bg-blue-50/70 font-semibold text-blue-950 ring-1 ring-blue-500/20'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="modalidad_externalizacion"
+                        checked={tipoExtInput === tipo}
+                        onChange={() => setTipoExtInput(tipo)}
+                        className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>{tipo}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Motivo / Justificación Técnica Detallada <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  value={motivoInput}
+                  onChange={(e) => {
+                    setMotivoInput(e.target.value);
+                    if (justificacionError) setJustificacionError('');
+                  }}
+                  placeholder="Ej: Falla en fuente de poder de alta tensión que sobrepasa el instrumental de calibración del taller local. Se requiere repuesto original código X-402 o derivación a servicio técnico autorizado del fabricante..."
+                  className="w-full rounded-lg border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Menciona repuestos específicos, pruebas realizadas o por qué no es posible resolver internamente.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setModalJustificacionOpen(false)}
+                className="rounded-lg px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!motivoInput.trim()) {
+                    setJustificacionError('Debes ingresar la justificación técnica para enviar la solicitud al supervisor.');
+                    return;
+                  }
+                  setEstadoSolicitudExternalizacion('Pendiente_Aprobacion');
+                  setMotivoExternalizacion(motivoInput.trim());
+                  setTipoExternalizacion(tipoExtInput);
+                  setExternalizacionSolicitadaPor(usuarioActivo?.nombre || 'Técnico');
+                  setRequiereExternalizacion(false);
+                  setSolicitudEnviadaAviso('Solicitud de externalización registrada. Al guardar la orden de trabajo quedará pendiente de aprobación en la bandeja del Ingeniero Supervisor.');
+                  setModalJustificacionOpen(false);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-blue-700 active:scale-95 transition"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>Enviar Solicitud a Supervisor</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* DIÁLOGO / MODAL DE RECHAZO DE EXTERNALIZACIÓN POR SUPERVISOR */}
+      {modalRechazoOpen && (
+        <div
+          id="modal-rechazo-externalizacion"
+          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-slate-900/10">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700">
+                  <X className="h-4 w-4" />
+                </div>
+                <span>Rechazar Solicitud de Externalización</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalRechazoOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+              Indica la justificación o instrucción técnica por la cual se desestima la compra o servicio externo para esta orden. Esta respuesta será notificada directamente al técnico de servicio.
+            </p>
+
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 space-y-1">
+              <div><strong>Orden de Trabajo:</strong> {mantenimientoEdicion?.codigo || 'Nueva OT'}</div>
+              <div><strong>Solicitado por:</strong> {externalizacionSolicitadaPor || 'Técnico'}</div>
+              <div><strong>Modalidad sugerida:</strong> {tipoExternalizacion}</div>
+              {motivoExternalizacion && (
+                <div className="text-[11px] text-slate-600 italic mt-1">
+                  Justificación previa del técnico: "{motivoExternalizacion}"
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Motivo / Observación del Rechazo <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={motivoRechazoInput}
+                onChange={(e) => setMotivoRechazoInput(e.target.value)}
+                placeholder="Indica la razón del rechazo o directriz técnica para resolver el requerimiento internamente..."
+                className="w-full rounded-lg border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+              />
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={procesandoAccionSupervisor}
+                onClick={() => setModalRechazoOpen(false)}
+                className="rounded-lg px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                id="btn-confirmar-rechazo-supervisor"
+                type="button"
+                disabled={procesandoAccionSupervisor}
+                onClick={handleConfirmarRechazoSupervisor}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-rose-700 active:scale-95 transition disabled:opacity-50"
+              >
+                {procesandoAccionSupervisor ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <X className="h-3.5 w-3.5" />
+                )}
+                <span>Confirmar Rechazo</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

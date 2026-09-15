@@ -15,6 +15,11 @@ import {
   Download,
   FileText,
   Stethoscope,
+  CheckCircle2,
+  ExternalLink,
+  X,
+  Clock,
+  ShoppingBag,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
 import { enrichMantenimiento, saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
@@ -97,14 +102,6 @@ export default function MantenimientosView({
     esClinico,
   } = useAuth();
 
-  const [soloMisOts, setSoloMisOts] = useState<boolean>(() => esTecnico);
-
-  useEffect(() => {
-    if (esTecnico) {
-      setSoloMisOts(true);
-    }
-  }, [esTecnico, usuarioActivo.id]);
-
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +113,28 @@ export default function MantenimientosView({
   const [editandoMant, setEditandoMant] = useState<Mantenimiento | null>(null);
   const [informeModalOpen, setInformeModalOpen] = useState(false);
   const [informeMantenimiento, setInformeMantenimiento] = useState<Mantenimiento | null>(null);
+  const [notificacionExito, setNotificacionExito] = useState<{
+    id: string;
+    codigo: string;
+    record: Mantenimiento;
+  } | null>(null);
 
-  async function fetchMantenimientos() {
+  // Auto-cierre de la notificación de éxito tras 8 segundos
+  useEffect(() => {
+    if (!notificacionExito) return;
+    const timer = setTimeout(() => {
+      setNotificacionExito(null);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [notificacionExito]);
+
+  function handleAbrirOTCreada(record: Mantenimiento) {
+    setNotificacionExito(null);
+    setEditandoMant(record);
+    setModalOpen(true);
+  }
+
+  async function fetchMantenimientos(): Promise<Mantenimiento[]> {
     setLoading(true);
     setError(null);
     const { data, error } = await supabase
@@ -126,11 +143,14 @@ export default function MantenimientosView({
       .order('created_at', { ascending: false });
     if (error) {
       setError(error.message);
+      setLoading(false);
+      return [];
     } else {
       const enriched = ((data as Mantenimiento[]) ?? []).map(enrichMantenimiento);
       setMantenimientos(enriched);
+      setLoading(false);
+      return enriched;
     }
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -165,8 +185,8 @@ export default function MantenimientosView({
       });
     }
 
-    // 2. Ingeniero de Servicio / Técnico: por defecto ve únicamente las OTs asignadas a su nombre/usuario
-    if (esTecnico && soloMisOts) {
+    // 2. Ingeniero de Servicio / Técnico: ve exclusivamente las OTs asignadas a su nombre/usuario
+    if (esTecnico) {
       const tecNombre = usuarioActivo.nombre.trim().toLowerCase();
       return mantenimientos.filter((m) => {
         if (!m.asignado_a) return false;
@@ -176,7 +196,7 @@ export default function MantenimientosView({
     }
 
     return mantenimientos;
-  }, [mantenimientos, esClinico, esTecnico, soloMisOts, serviceEquipmentIds, usuarioActivo]);
+  }, [mantenimientos, esClinico, esTecnico, serviceEquipmentIds, usuarioActivo]);
 
   const filtered = useMemo(() => {
     const q = (search || '').trim().toLowerCase();
@@ -285,9 +305,17 @@ export default function MantenimientosView({
       diagnostico_final: data.diagnostico_final ?? null,
       repuestos_utilizados: data.repuestos_utilizados ?? null,
       costo: data.costo ?? null,
+      requiere_externalizacion: data.requiere_externalizacion ?? false,
+      tipo_externalizacion: data.tipo_externalizacion ?? null,
+      estado_solicitud_externalizacion: data.estado_solicitud_externalizacion ?? null,
+      motivo_externalizacion: data.motivo_externalizacion ?? null,
+      externalizacion_solicitada_por: data.externalizacion_solicitada_por ?? null,
+      externalizacion_resuelta_por: data.externalizacion_resuelta_por ?? null,
     };
 
-    const { error: saveError } = await saveMantenimientoRecord({
+    const esNuevo = !editandoMant;
+
+    const { error: saveError, record: savedRecord, data: savedData } = await saveMantenimientoRecord({
       id: editandoMant?.id,
       codigo: editandoMant?.codigo,
       isEdit: Boolean(editandoMant),
@@ -310,7 +338,24 @@ export default function MantenimientosView({
 
     setModalOpen(false);
     setEditandoMant(null);
-    await fetchMantenimientos();
+    const refreshed = await fetchMantenimientos();
+
+    if (esNuevo) {
+      const rawCreated = (savedRecord || (Array.isArray(savedData) ? savedData[0] : savedData)) as Mantenimiento | undefined;
+      const targetRecord =
+        (rawCreated?.id && refreshed.find((m) => m.id === rawCreated.id)) ||
+        (rawCreated?.codigo && refreshed.find((m) => m.codigo === rawCreated.codigo)) ||
+        rawCreated ||
+        refreshed[0];
+
+      if (targetRecord) {
+        setNotificacionExito({
+          id: targetRecord.id,
+          codigo: targetRecord.codigo || 'MANT-00X',
+          record: targetRecord,
+        });
+      }
+    }
   }
 
   async function handleDelete(m: Mantenimiento) {
@@ -547,24 +592,13 @@ export default function MantenimientosView({
               </div>
               <div>
                 <span className="font-bold block text-amber-950">
-                  {soloMisOts
-                    ? `Vista Personal Técnico: OTs asignadas a ${usuarioActivo.nombre}`
-                    : 'Vista Global: Todas las OTs Institucionales (Modo Lectura General)'}
+                  Panel de Trabajo Técnico: OTs asignadas a {usuarioActivo.nombre}
                 </span>
                 <span className="text-[11px] text-amber-700">
-                  {soloMisOts
-                    ? 'Por defecto solo ves tus órdenes asignadas para cerrar y emitir informe técnico.'
-                    : 'Puedes revisar el catálogo general de mantenimientos.'}
+                  Visualización exclusiva de las órdenes de trabajo asignadas a tu usuario para intervención, cierre y emisión de informe técnico.
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setSoloMisOts(!soloMisOts)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 transition shadow-2xs whitespace-nowrap self-start sm:self-auto"
-            >
-              {soloMisOts ? 'Ver Todas las OTs' : 'Ver Solo Mis OTs Asignadas'}
-            </button>
           </div>
         )}
 
@@ -871,6 +905,30 @@ export default function MantenimientosView({
                         >
                           <EstadoMBadge estado={m.estado_mantenimiento} />
                         </button>
+                        {m.estado_solicitud_externalizacion === 'Pendiente_Aprobacion' && (
+                          <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900 border border-amber-300">
+                            <Clock className="h-2.5 w-2.5 text-amber-600 animate-pulse" />
+                            <span>Ext. Pendiente</span>
+                          </span>
+                        )}
+                        {m.estado_solicitud_externalizacion === 'Aprobada' && (
+                          <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900 border border-emerald-300">
+                            <ShoppingBag className="h-2.5 w-2.5 text-emerald-600" />
+                            <span>Ext. Aprobada</span>
+                          </span>
+                        )}
+                        {m.estado_solicitud_externalizacion === 'Rechazada' && (
+                          <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-900 border border-rose-300">
+                            <X className="h-2.5 w-2.5 text-rose-600" />
+                            <span>Ext. Rechazada</span>
+                          </span>
+                        )}
+                        {!m.estado_solicitud_externalizacion && m.requiere_externalizacion && (
+                          <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-900 border border-blue-200">
+                            <ShoppingBag className="h-2.5 w-2.5 text-blue-600" />
+                            <span>Externalización</span>
+                          </span>
+                        )}
                         {m.estado_mantenimiento === 'Completado' && m.numero_informe && (
                           <button
                             type="button"
@@ -929,6 +987,63 @@ export default function MantenimientosView({
         >
           <Plus className="h-6 w-6" />
         </button>
+      )}
+
+      {/* Banner / Alerta flotante interactiva de confirmación tras crear orden de mantenimiento */}
+      {notificacionExito && (
+        <div
+          id="toast-confirmacion-mantenimiento"
+          role="status"
+          aria-live="polite"
+          className="fixed top-5 right-5 z-50 w-[94vw] sm:w-[460px] rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-xl ring-1 ring-emerald-900/10 transition-all duration-300 animate-in fade-in slide-in-from-top-4"
+        >
+          <div className="flex items-start gap-3.5">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-emerald-950">
+                  Orden de Trabajo Creada
+                </span>
+                <span className="rounded-md border border-emerald-300/80 bg-emerald-100/90 px-2 py-0.5 font-mono text-xs font-bold text-emerald-800">
+                  {notificacionExito.codigo}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-emerald-900 leading-snug">
+                Mantenimiento creado exitosamente con el correlativo{' '}
+                <strong className="font-mono font-semibold text-emerald-950">
+                  {notificacionExito.codigo}
+                </strong>
+                .
+              </p>
+              <div className="mt-3 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  id="btn-verificar-abrir-ot"
+                  onClick={() => handleAbrirOTCreada(notificacionExito.record)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-800 active:scale-95 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Verificar / Abrir OT</span>
+                </button>
+                <span className="text-[11px] font-medium text-emerald-600">
+                  Auto-cierre en 8s
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="btn-cerrar-notificacion-ot"
+              onClick={() => setNotificacionExito(null)}
+              className="rounded-lg p-1 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800 transition-colors focus:outline-none"
+              title="Cerrar notificación"
+              aria-label="Cerrar notificación"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       )}
 
       <MantenimientoModal

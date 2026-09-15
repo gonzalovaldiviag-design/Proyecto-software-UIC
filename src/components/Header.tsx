@@ -11,9 +11,12 @@ import {
   ChevronDown,
   Check,
   Building2,
+  Bell,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
-import { type RolUsuario } from '@/lib/supabase';
+import { supabase, type RolUsuario, type Notificacion } from '@/lib/supabase';
+import NotificationInboxModal from '@/components/NotificationInboxModal';
 
 export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'usuarios';
 
@@ -21,6 +24,7 @@ interface HeaderProps {
   currentTab: AppTab;
   onTabChange: (tab: AppTab) => void;
   onAddEquipo?: () => void;
+  onOpenMantenimientoPorCodigo?: (codigo: string) => void;
 }
 
 const ROL_CONFIG: Record<
@@ -64,10 +68,61 @@ const ROL_CONFIG: Record<
   },
 };
 
-export default function Header({ currentTab, onTabChange }: HeaderProps) {
+export default function Header({
+  currentTab,
+  onTabChange,
+  onOpenMantenimientoPorCodigo,
+}: HeaderProps) {
   const { usuarioActivo, usuarios, cambiarUsuarioActivo, puede } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [conteoNoLeidas, setConteoNoLeidas] = useState(0);
+  const [conteoPendientesSupervisor, setConteoPendientesSupervisor] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const esSupervisorOAdmin =
+    usuarioActivo.rol === 'Ingeniero Supervisor' ||
+    usuarioActivo.rol === 'Administrador (Jefe de Unidad)';
+
+  useEffect(() => {
+    async function actualizarConteo() {
+      try {
+        const { data } = await supabase.from('notificaciones').select('*');
+        if (data) {
+          const list = data as Notificacion[];
+          const pertinentes = list.filter((n) => {
+            if (n.destinatario_id && n.destinatario_id === usuarioActivo.id) return true;
+            if (n.destinatario_rol) {
+              if (esSupervisorOAdmin && n.destinatario_rol === 'Ingeniero Supervisor') return true;
+              if (
+                usuarioActivo.rol === 'Ingeniero de Servicio / Técnico' &&
+                n.destinatario_rol === 'Ingeniero de Servicio / Técnico'
+              ) {
+                return true;
+              }
+            }
+            if (!n.destinatario_rol && !n.destinatario_id) return true;
+            if (usuarioActivo.rol === 'Administrador (Jefe de Unidad)') return true;
+            return false;
+          });
+
+          const unread = pertinentes.filter((n) => !n.leida).length;
+          const pend = pertinentes.filter(
+            (n) => n.tipo === 'solicitud_externalizacion' && !n.leida
+          ).length;
+
+          setConteoNoLeidas(unread);
+          setConteoPendientesSupervisor(pend);
+        }
+      } catch (err) {
+        console.warn('Error al actualizar contador de notificaciones:', err);
+      }
+    }
+
+    actualizarConteo();
+    window.addEventListener('notificaciones_updated', actualizarConteo);
+    return () => window.removeEventListener('notificaciones_updated', actualizarConteo);
+  }, [usuarioActivo, esSupervisorOAdmin]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -80,6 +135,19 @@ export default function Header({ currentTab, onTabChange }: HeaderProps) {
   }, []);
 
   const config = ROL_CONFIG[usuarioActivo.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
+
+  function handleAbrirOTDesdeNotificacion(codigoOT: string) {
+    if (onOpenMantenimientoPorCodigo) {
+      onOpenMantenimientoPorCodigo(codigoOT);
+    } else {
+      onTabChange('mantenimiento');
+      window.dispatchEvent(
+        new CustomEvent('abrir_mantenimiento_por_codigo', {
+          detail: { codigo: codigoOT },
+        })
+      );
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md print:hidden shadow-xs">
@@ -104,8 +172,48 @@ export default function Header({ currentTab, onTabChange }: HeaderProps) {
           </div>
         </div>
 
-        {/* Quick User Switcher */}
-        <div className="relative" ref={dropdownRef}>
+        {/* Acciones de Cabecera: Bandeja de Notificaciones y Cambio de Usuario */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Botón de Campana / Bandeja de Notificaciones */}
+          <button
+            id="btn-bandeja-notificaciones-header"
+            type="button"
+            onClick={() => setInboxOpen(true)}
+            className={`relative flex items-center gap-1.5 rounded-xl border p-2 text-xs font-semibold transition active:scale-95 shadow-xs ${
+              conteoPendientesSupervisor > 0
+                ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 ring-2 ring-amber-400/30'
+                : conteoNoLeidas > 0
+                  ? 'border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 ring-2 ring-blue-400/20'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+            title={`Bandeja de Notificaciones: ${conteoNoLeidas} no leídas${
+              conteoPendientesSupervisor > 0
+                ? ` (${conteoPendientesSupervisor} solicitud(es) de externalización pendiente(s))`
+                : ''
+            }`}
+            aria-label="Bandeja de Notificaciones"
+          >
+            <Bell className={`h-4 w-4 ${conteoNoLeidas > 0 ? 'animate-bounce' : ''}`} />
+            <span className="hidden md:inline text-xs">Notificaciones</span>
+            {conteoNoLeidas > 0 && (
+              <span
+                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-black text-white shadow-xs ${
+                  conteoPendientesSupervisor > 0 ? 'bg-amber-600' : 'bg-blue-600'
+                }`}
+              >
+                {conteoNoLeidas}
+              </span>
+            )}
+            {conteoPendientesSupervisor > 0 && (
+              <span className="hidden lg:inline-flex items-center gap-1 rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-bold text-amber-900">
+                <Clock className="h-2.5 w-2.5" />
+                <span>{conteoPendientesSupervisor} V°B°</span>
+              </span>
+            )}
+          </button>
+
+          {/* Quick User Switcher */}
+          <div className="relative" ref={dropdownRef}>
           <button
             type="button"
             onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -242,6 +350,7 @@ export default function Header({ currentTab, onTabChange }: HeaderProps) {
           )}
         </div>
       </div>
+    </div>
 
       {/* Role Notice Banner */}
       {usuarioActivo.rol === 'Clínico / Solicitante' && (
@@ -342,6 +451,13 @@ export default function Header({ currentTab, onTabChange }: HeaderProps) {
           )}
         </nav>
       </div>
+
+      {/* Modal Bandeja de Notificaciones */}
+      <NotificationInboxModal
+        open={inboxOpen}
+        onClose={() => setInboxOpen(false)}
+        onOpenMantenimiento={handleAbrirOTDesdeNotificacion}
+      />
     </header>
   );
 }

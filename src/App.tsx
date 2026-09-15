@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-react';
 import {
   supabase,
   type Equipo,
@@ -59,6 +59,15 @@ function AppContent() {
   const [mantEquipo, setMantEquipo] = useState<Equipo | null>(null);
   const [choiceModalOpen, setChoiceModalOpen] = useState(false);
   const [choiceEquipo, setChoiceEquipo] = useState<Equipo | null>(null);
+  const [notificacionOTCreada, setNotificacionOTCreada] = useState<{ id: string; codigo: string } | null>(null);
+
+  useEffect(() => {
+    if (!notificacionOTCreada) return;
+    const timer = setTimeout(() => {
+      setNotificacionOTCreada(null);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [notificacionOTCreada]);
 
   async function fetchEquipos() {
     setLoading(true);
@@ -167,7 +176,7 @@ function AppContent() {
       costo: data.costo ?? null,
     };
 
-    const { error } = await saveMantenimientoRecord({
+    const { error, record, data: savedData } = await saveMantenimientoRecord({
       isEdit: false,
       payload,
     });
@@ -185,6 +194,14 @@ function AppContent() {
 
     setMantModalOpen(false);
     setMantEquipo(null);
+
+    const rec = (record || (Array.isArray(savedData) ? savedData[0] : savedData)) as { id?: string; codigo?: string } | undefined;
+    if (rec?.codigo) {
+      setNotificacionOTCreada({
+        id: rec.id || '',
+        codigo: rec.codigo,
+      });
+    }
   }
 
   async function handleSaveEquipo(data: {
@@ -337,6 +354,66 @@ function AppContent() {
         equipo={hojaVidaEquipo}
         onOpenMantenimiento={openMantenimiento}
       />
+
+      {/* Banner flotante de confirmación tras crear orden de mantenimiento desde Inventario */}
+      {notificacionOTCreada && (
+        <div
+          id="toast-confirmacion-ot-app"
+          role="status"
+          aria-live="polite"
+          className="fixed top-5 right-5 z-50 w-[94vw] sm:w-[460px] rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-xl ring-1 ring-emerald-900/10 transition-all duration-300 animate-in fade-in slide-in-from-top-4"
+        >
+          <div className="flex items-start gap-3.5">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-emerald-950">
+                  Orden de Trabajo Creada
+                </span>
+                <span className="rounded-md border border-emerald-300/80 bg-emerald-100/90 px-2 py-0.5 font-mono text-xs font-bold text-emerald-800">
+                  {notificacionOTCreada.codigo}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-emerald-900 leading-snug">
+                Mantenimiento creado exitosamente con el correlativo{' '}
+                <strong className="font-mono font-semibold text-emerald-950">
+                  {notificacionOTCreada.codigo}
+                </strong>
+                .
+              </p>
+              <div className="mt-3 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  id="btn-verificar-abrir-ot-app"
+                  onClick={() => {
+                    setTab('mantenimiento');
+                    setNotificacionOTCreada(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-800 active:scale-95 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Verificar / Abrir en Mantenimientos</span>
+                </button>
+                <span className="text-[11px] font-medium text-emerald-600">
+                  Auto-cierre en 8s
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              id="btn-cerrar-notificacion-ot-app"
+              onClick={() => setNotificacionOTCreada(null)}
+              className="rounded-lg p-1 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800 transition-colors focus:outline-none"
+              title="Cerrar notificación"
+              aria-label="Cerrar notificación"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

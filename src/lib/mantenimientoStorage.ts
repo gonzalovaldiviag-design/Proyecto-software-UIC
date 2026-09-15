@@ -10,6 +10,12 @@ export interface MantenimientoExtraMeta {
   diagnostico_final?: string | null;
   repuestos_utilizados?: string | null;
   costo?: number | null;
+  requiere_externalizacion?: boolean | null;
+  tipo_externalizacion?: string | null;
+  estado_solicitud_externalizacion?: 'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada' | null;
+  motivo_externalizacion?: string | null;
+  externalizacion_solicitada_por?: string | null;
+  externalizacion_resuelta_por?: string | null;
 }
 
 const LOCAL_STORAGE_KEY = 'cormed_mantenimientos_extra_meta';
@@ -85,6 +91,24 @@ export function enrichMantenimiento(m: Mantenimiento): Mantenimiento {
   const diagnostico_final = m.diagnostico_final || mergedMeta.diagnostico_final || null;
   const repuestos_utilizados = m.repuestos_utilizados || mergedMeta.repuestos_utilizados || null;
   const costo = m.costo != null ? m.costo : (mergedMeta.costo != null ? mergedMeta.costo : null);
+  const requiere_externalizacion =
+    m.requiere_externalizacion !== undefined
+      ? m.requiere_externalizacion
+      : (mergedMeta.requiere_externalizacion ?? false);
+  const tipo_externalizacion =
+    m.tipo_externalizacion ||
+    (mergedMeta.tipo_externalizacion as Mantenimiento['tipo_externalizacion']) ||
+    null;
+  const estado_solicitud_externalizacion =
+    m.estado_solicitud_externalizacion ||
+    mergedMeta.estado_solicitud_externalizacion ||
+    null;
+  const motivo_externalizacion =
+    m.motivo_externalizacion || mergedMeta.motivo_externalizacion || null;
+  const externalizacion_solicitada_por =
+    m.externalizacion_solicitada_por || mergedMeta.externalizacion_solicitada_por || null;
+  const externalizacion_resuelta_por =
+    m.externalizacion_resuelta_por || mergedMeta.externalizacion_resuelta_por || null;
 
   return {
     ...m,
@@ -93,6 +117,12 @@ export function enrichMantenimiento(m: Mantenimiento): Mantenimiento {
     diagnostico_final,
     repuestos_utilizados,
     costo,
+    requiere_externalizacion,
+    tipo_externalizacion,
+    estado_solicitud_externalizacion,
+    motivo_externalizacion,
+    externalizacion_solicitada_por,
+    externalizacion_resuelta_por,
   };
 }
 
@@ -107,7 +137,7 @@ export async function saveMantenimientoRecord(params: {
   codigo?: string;
   isEdit: boolean;
   payload: Record<string, unknown>;
-}): Promise<{ error: Error | null; data?: unknown }> {
+}): Promise<{ error: Error | null; data?: unknown; record?: Mantenimiento }> {
   const { id, codigo, isEdit, payload } = params;
 
   const extraMeta: MantenimientoExtraMeta = {
@@ -116,6 +146,21 @@ export async function saveMantenimientoRecord(params: {
     diagnostico_final: (payload.diagnostico_final as string) ?? null,
     repuestos_utilizados: (payload.repuestos_utilizados as string) ?? null,
     costo: (payload.costo as number) ?? null,
+    requiere_externalizacion: (payload.requiere_externalizacion as boolean) ?? false,
+    tipo_externalizacion: (payload.tipo_externalizacion as string) ?? null,
+    estado_solicitud_externalizacion: (payload.estado_solicitud_externalizacion as 'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada') ?? null,
+    motivo_externalizacion: (payload.motivo_externalizacion as string) ?? null,
+    externalizacion_solicitada_por: (payload.externalizacion_solicitada_por as string) ?? null,
+    externalizacion_resuelta_por: (payload.externalizacion_resuelta_por as string) ?? null,
+  };
+
+  const getRecord = (resultData: unknown): Mantenimiento | undefined => {
+    if (!resultData) return undefined;
+    const raw = Array.isArray(resultData) ? resultData[0] : resultData;
+    if (raw && typeof raw === 'object' && 'id' in raw) {
+      return enrichMantenimiento(raw as Mantenimiento);
+    }
+    return undefined;
   };
 
   // 1. First attempt: try full payload directly (works if database columns exist)
@@ -129,7 +174,8 @@ export async function saveMantenimientoRecord(params: {
 
       if (!error) {
         if (id) saveLocalMeta(id, codigo, extraMeta);
-        return { error: null, data };
+        const rec = getRecord(data);
+        return { error: null, data, record: rec };
       }
 
       // Check if the error is a missing column in Supabase schema cache
@@ -146,9 +192,11 @@ export async function saveMantenimientoRecord(params: {
         .select();
 
       if (!error) {
-        const createdId = (data as unknown as { id?: string }[])?.[0]?.id;
-        if (createdId) saveLocalMeta(createdId, codigo, extraMeta);
-        return { error: null, data };
+        const rec = getRecord(data);
+        const createdId = rec?.id || (data as unknown as { id?: string }[])?.[0]?.id;
+        const createdCodigo = rec?.codigo || codigo;
+        if (createdId) saveLocalMeta(createdId, createdCodigo, extraMeta);
+        return { error: null, data, record: rec };
       }
 
       if (error.code === 'PGRST204' || error.message?.includes('Could not find the')) {
@@ -169,7 +217,16 @@ async function executeSafeFallback(
   payload: Record<string, unknown>,
   extraMeta: MantenimientoExtraMeta,
   codigo?: string
-): Promise<{ error: Error | null; data?: unknown }> {
+): Promise<{ error: Error | null; data?: unknown; record?: Mantenimiento }> {
+  const getRecord = (resultData: unknown): Mantenimiento | undefined => {
+    if (!resultData) return undefined;
+    const raw = Array.isArray(resultData) ? resultData[0] : resultData;
+    if (raw && typeof raw === 'object' && 'id' in raw) {
+      return enrichMantenimiento(raw as Mantenimiento);
+    }
+    return undefined;
+  };
+
   // Strip extended columns that don't exist in the database table
   const safePayload: Record<string, unknown> = { ...payload };
   delete safePayload.numero_informe;
@@ -177,6 +234,12 @@ async function executeSafeFallback(
   delete safePayload.diagnostico_final;
   delete safePayload.repuestos_utilizados;
   delete safePayload.costo;
+  delete safePayload.requiere_externalizacion;
+  delete safePayload.tipo_externalizacion;
+  delete safePayload.estado_solicitud_externalizacion;
+  delete safePayload.motivo_externalizacion;
+  delete safePayload.externalizacion_solicitada_por;
+  delete safePayload.externalizacion_resuelta_por;
 
   // Dual-layer persistence: Store JSON string in existing 'documento_url' field in database
   safePayload.documento_url = JSON.stringify(extraMeta);
@@ -193,7 +256,8 @@ async function executeSafeFallback(
     }
 
     saveLocalMeta(id, codigo, extraMeta);
-    return { error: null, data };
+    const rec = getRecord(data);
+    return { error: null, data, record: rec };
   } else {
     const { data, error } = await supabase
       .from('mantenimientos')
@@ -204,8 +268,10 @@ async function executeSafeFallback(
       return { error: new Error(error.message) };
     }
 
-    const createdId = (data as unknown as { id?: string }[])?.[0]?.id;
-    if (createdId) saveLocalMeta(createdId, codigo, extraMeta);
-    return { error: null, data };
+    const rec = getRecord(data);
+    const createdId = rec?.id || (data as unknown as { id?: string }[])?.[0]?.id;
+    const createdCodigo = rec?.codigo || codigo;
+    if (createdId) saveLocalMeta(createdId, createdCodigo, extraMeta);
+    return { error: null, data, record: rec };
   }
 }
