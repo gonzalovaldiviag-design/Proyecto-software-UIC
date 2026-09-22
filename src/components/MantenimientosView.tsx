@@ -20,12 +20,15 @@ import {
   X,
   Clock,
   ShoppingBag,
+  RotateCcw,
 } from 'lucide-react';
 import { supabase, type Mantenimiento, type EstadoMantenimiento, type TipoMantenimiento, type Equipo } from '@/lib/supabase';
 import { enrichMantenimiento, saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
 import InformeMantenimientoModal from '@/components/InformeMantenimientoModal';
+import TableColumnHeader, { type ColumnSortState } from '@/components/TableColumnHeader';
 import { useAuth } from '@/lib/authContext';
+import { exportarACSV, type ExportColumn } from '@/utils/exportUtils';
 
 const estadosM: EstadoMantenimiento[] = [
   'Pendiente de Asignación',
@@ -119,6 +122,43 @@ export default function MantenimientosView({
     record: Mantenimiento;
   } | null>(null);
 
+  // Subfiltros interactivos por encabezado de columna
+  const [colFilters, setColFilters] = useState<{
+    codigo: string;
+    equipo: string;
+    tipo: string;
+    problema: string;
+    solicitado_por: string;
+    asignado_a: string;
+    fecha: string;
+    estado: string;
+  }>({
+    codigo: '',
+    equipo: '',
+    tipo: '',
+    problema: '',
+    solicitado_por: '',
+    asignado_a: '',
+    fecha: '',
+    estado: '',
+  });
+
+  const [sortConfig, setSortConfig] = useState<ColumnSortState | null>(null);
+
+  const handleSort = (key: string) => {
+    setSortConfig((prev) => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const handleColumnFilterChange = (key: keyof typeof colFilters, value: string) => {
+    setColFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
   // Auto-cierre de la notificación de éxito tras 8 segundos
   useEffect(() => {
     if (!notificacionExito) return;
@@ -156,6 +196,35 @@ export default function MantenimientosView({
   useEffect(() => {
     fetchMantenimientos();
   }, []);
+
+  useEffect(() => {
+    function handleCustomAbrir(e: Event) {
+      const customEvent = e as CustomEvent<{ codigo?: string }>;
+      const cod = customEvent.detail?.codigo;
+      if (!cod) return;
+      const encontrado = mantenimientos.find(
+        (m) => m.codigo?.toLowerCase() === cod.toLowerCase() || m.id === cod
+      );
+      if (encontrado) {
+        setEditandoMant(encontrado);
+        setModalOpen(true);
+      } else {
+        supabase
+          .from('mantenimientos')
+          .select('*')
+          .or(`codigo.eq.${cod},id.eq.${cod}`)
+          .then(({ data }) => {
+            if (data && data[0]) {
+              const enriched = enrichMantenimiento(data[0] as Mantenimiento);
+              setEditandoMant(enriched);
+              setModalOpen(true);
+            }
+          });
+      }
+    }
+    window.addEventListener('abrir_mantenimiento_por_codigo', handleCustomAbrir);
+    return () => window.removeEventListener('abrir_mantenimiento_por_codigo', handleCustomAbrir);
+  }, [mantenimientos]);
 
   // Equipos del servicio del clínico
   const serviceEquipmentIds = useMemo(() => {
@@ -198,9 +267,48 @@ export default function MantenimientosView({
     return mantenimientos;
   }, [mantenimientos, esClinico, esTecnico, serviceEquipmentIds, usuarioActivo]);
 
+  // Opciones únicas para los subfiltros dropdown de encabezados
+  const uniqueTipos = useMemo(() => {
+    const s = new Set<string>();
+    mantenimientosBase.forEach((m) => {
+      if (m.tipo_mantenimiento) s.add(m.tipo_mantenimiento);
+    });
+    return Array.from(s).sort();
+  }, [mantenimientosBase]);
+
+  const uniqueSolicitadosPor = useMemo(() => {
+    const s = new Set<string>();
+    mantenimientosBase.forEach((m) => {
+      if (m.solicitado_por?.trim()) s.add(m.solicitado_por.trim());
+    });
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [mantenimientosBase]);
+
+  const uniqueAsignadosA = useMemo(() => {
+    const s = new Set<string>();
+    mantenimientosBase.forEach((m) => {
+      if (m.asignado_a?.trim()) s.add(m.asignado_a.trim());
+    });
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [mantenimientosBase]);
+
+  const uniqueEstados = useMemo(() => {
+    return ['Pendiente de Asignación', 'En proceso', 'Completado'];
+  }, []);
+
   const filtered = useMemo(() => {
     const q = (search || '').trim().toLowerCase();
-    return mantenimientosBase.filter((m) => {
+    const cCodigo = colFilters.codigo.trim().toLowerCase();
+    const cEquipo = colFilters.equipo.trim().toLowerCase();
+    const cTipo = colFilters.tipo.trim().toLowerCase();
+    const cProblema = colFilters.problema.trim().toLowerCase();
+    const cSolicitado = colFilters.solicitado_por.trim().toLowerCase();
+    const cAsignado = colFilters.asignado_a.trim().toLowerCase();
+    const cFecha = colFilters.fecha.trim().toLowerCase();
+    const cEstado = colFilters.estado.trim().toLowerCase();
+
+    const result = mantenimientosBase.filter((m) => {
+      // 1. Buscador Global
       const matchSearch =
         q === '' ||
         (m.codigo ?? '').toLowerCase().includes(q) ||
@@ -209,13 +317,116 @@ export default function MantenimientosView({
         (m.problema_reportado ?? '').toLowerCase().includes(q) ||
         (m.solicitado_por ?? '').toLowerCase().includes(q) ||
         (m.asignado_a ?? '').toLowerCase().includes(q);
+
+      // 2. Filtros de Estado y Vencimiento generales
       const matchEstado =
         filtrosEstado.length === 0 || filtrosEstado.includes(m.estado_mantenimiento);
       const matchVencido =
         !filtroVencidos || (m.estado_mantenimiento !== 'Completado' && esVencido(m.fecha_requerimiento));
-      return matchSearch && matchEstado && matchVencido;
+
+      if (!matchSearch || !matchEstado || !matchVencido) return false;
+
+      // 3. Subfiltros por Encabezados de Columna (AND aditivo)
+      if (cCodigo) {
+        const cod = `${m.codigo || ''} ${m.numero_informe || ''}`.toLowerCase();
+        if (!cod.includes(cCodigo)) return false;
+      }
+
+      if (cEquipo) {
+        const eqText = (m.equipo_identificacion || '').toLowerCase();
+        if (!eqText.includes(cEquipo)) return false;
+      }
+
+      if (cTipo && cTipo !== 'todos' && cTipo !== 'todas') {
+        if ((m.tipo_mantenimiento || '').toLowerCase() !== cTipo) return false;
+      }
+
+      if (cProblema) {
+        const prob = (m.problema_reportado || '').toLowerCase();
+        if (!prob.includes(cProblema)) return false;
+      }
+
+      if (cSolicitado && cSolicitado !== 'todos' && cSolicitado !== 'todas') {
+        if ((m.solicitado_por || '').toLowerCase() !== cSolicitado) return false;
+      }
+
+      if (cAsignado && cAsignado !== 'todos' && cAsignado !== 'todas') {
+        if ((m.asignado_a || '').toLowerCase() !== cAsignado) return false;
+      }
+
+      if (cFecha) {
+        const fec = (m.fecha_requerimiento || '').toLowerCase();
+        if (!fec.includes(cFecha)) return false;
+      }
+
+      if (cEstado && cEstado !== 'todos' && cEstado !== 'todas') {
+        if ((m.estado_mantenimiento || '').toLowerCase() !== cEstado) return false;
+      }
+
+      return true;
     });
-  }, [mantenimientosBase, search, filtrosEstado, filtroVencidos]);
+
+    // 4. Ordenamiento interactivo por columna
+    if (sortConfig) {
+      const { key, direction } = sortConfig;
+      const factor = direction === 'asc' ? 1 : -1;
+      return [...result].sort((a, b) => {
+        let valA: string | number = '';
+        let valB: string | number = '';
+
+        switch (key) {
+          case 'codigo':
+            valA = a.codigo || a.numero_informe || '';
+            valB = b.codigo || b.numero_informe || '';
+            break;
+          case 'equipo':
+            valA = a.equipo_identificacion || '';
+            valB = b.equipo_identificacion || '';
+            break;
+          case 'tipo':
+            valA = a.tipo_mantenimiento || '';
+            valB = b.tipo_mantenimiento || '';
+            break;
+          case 'problema':
+            valA = a.problema_reportado || '';
+            valB = b.problema_reportado || '';
+            break;
+          case 'solicitado_por':
+            valA = a.solicitado_por || '';
+            valB = b.solicitado_por || '';
+            break;
+          case 'asignado_a':
+            valA = a.asignado_a || '';
+            valB = b.asignado_a || '';
+            break;
+          case 'fecha':
+            valA = a.fecha_requerimiento || '';
+            valB = b.fecha_requerimiento || '';
+            break;
+          case 'estado':
+            valA = a.estado_mantenimiento || '';
+            valB = b.estado_mantenimiento || '';
+            break;
+          default:
+            return 0;
+        }
+
+        if (typeof valA === 'string' && typeof valB === 'string') {
+          return valA.localeCompare(valB) * factor;
+        }
+        return (valA > valB ? 1 : -1) * factor;
+      });
+    }
+
+    return result;
+  }, [
+    mantenimientosBase,
+    search,
+    filtrosEstado,
+    filtroVencidos,
+    colFilters,
+    sortConfig,
+  ]);
 
   const pendientes = mantenimientosBase.filter((m) => m.estado_mantenimiento === 'Pendiente de Asignación').length;
   const enProceso = mantenimientosBase.filter((m) => m.estado_mantenimiento === 'En proceso').length;
@@ -340,6 +551,42 @@ export default function MantenimientosView({
     setEditandoMant(null);
     const refreshed = await fetchMantenimientos();
 
+    // Notificación de Asignación / Reasignación de OT para el técnico
+    const nuevoAsignado = (data.asignado_a || '').trim();
+    const anteriorAsignado = (editandoMant?.asignado_a || '').trim();
+    if (nuevoAsignado && (esNuevo || nuevoAsignado !== anteriorAsignado)) {
+      try {
+        let tecnicoId: string | null = null;
+        const { data: uData } = await supabase.from('perfiles').select('*');
+        if (uData && Array.isArray(uData)) {
+          const u = uData.find((usr) => usr.nombre?.toLowerCase() === nuevoAsignado.toLowerCase());
+          if (u) tecnicoId = u.id;
+        }
+
+        const rawCreated = (savedRecord || (Array.isArray(savedData) ? savedData[0] : savedData)) as Mantenimiento | undefined;
+        const codOT = editandoMant?.codigo || rawCreated?.codigo || 'MANT-00X';
+        const mantId = editandoMant?.id || rawCreated?.id || null;
+        const eqNombre = data.equipo_identificacion || 'Equipo Médico';
+        const servClinico = data.solicitado_por || 'Servicio Clínico';
+
+        await supabase.from('notificaciones').insert({
+          destinatario_rol: 'Ingeniero de Servicio / Técnico',
+          destinatario_id: tecnicoId,
+          destinatario_nombre: nuevoAsignado,
+          titulo: `Nueva OT Asignada: ${codOT}`,
+          mensaje: `Se te ha asignado la orden para el equipo ${eqNombre} del servicio ${servClinico}.`,
+          tipo: 'ot_asignada',
+          leida: false,
+          mantenimiento_id: mantId,
+          codigo_mantenimiento: codOT,
+          codigo_mantenimiento_ref: codOT,
+        });
+        window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+      } catch (asigErr) {
+        console.warn('Error emitiendo notificación de asignación:', asigErr);
+      }
+    }
+
     if (esNuevo) {
       const rawCreated = (savedRecord || (Array.isArray(savedData) ? savedData[0] : savedData)) as Mantenimiento | undefined;
       const targetRecord =
@@ -431,102 +678,103 @@ export default function MantenimientosView({
   }
 
   function handleExportCSV() {
-    const tieneFiltros = (search || '').trim() !== '' || filtrosEstado.length > 0 || filtroVencidos;
-    const dataToExport = tieneFiltros ? filtered : mantenimientos;
+    if (filtered.length === 0) return;
 
-    if (dataToExport.length === 0) return;
-
-    const headers = [
-      'N° Informe Técnico',
-      'Equipo',
-      'Código/Serie',
-      'Tipo Mantenimiento',
-      'Fecha Programada',
-      'Fecha Realizada',
-      'Responsable / Técnico',
-      'Costo',
-      'Estado',
-      'Diagnóstico Final',
-      'Observaciones',
+    const columnas: ExportColumn<Mantenimiento>[] = [
+      {
+        header: 'Código OT',
+        accessor: (m) => m.codigo,
+      },
+      {
+        header: 'Equipo',
+        accessor: (m) => {
+          const eq = equipos.find((e) => e.id === m.equipo_id);
+          return m.equipo_identificacion || eq?.nombre || '—';
+        },
+      },
+      {
+        header: 'N° Inventario/Serie',
+        accessor: (m) => {
+          const eq = equipos.find((e) => e.id === m.equipo_id);
+          const partes = [eq?.inventario, eq?.serie].filter(Boolean);
+          return partes.length > 0 ? partes.join(' / ') : '—';
+        },
+      },
+      {
+        header: 'Servicio Clínico',
+        accessor: (m) => {
+          const eq = equipos.find((e) => e.id === m.equipo_id);
+          return (m as unknown as { servicio_clinico?: string }).servicio_clinico || eq?.ubicacion || '—';
+        },
+      },
+      {
+        header: 'Tipo de Mantenimiento',
+        accessor: (m) => m.tipo_mantenimiento || '—',
+      },
+      {
+        header: 'Estado',
+        accessor: (m) => m.estado_mantenimiento || '—',
+      },
+      {
+        header: 'Prioridad',
+        accessor: (m) => {
+          return (
+            (m as unknown as { prioridad?: string }).prioridad ||
+            (esVencido(m.fecha_requerimiento) ? 'Alta (Vencida)' : 'Normal')
+          );
+        },
+      },
+      {
+        header: 'Técnico Asignado',
+        accessor: (m) => m.asignado_a || m.completado_por || 'Sin asignar',
+      },
+      {
+        header: 'Externalización (Sí/No)',
+        accessor: (m) => (m.requiere_externalizacion ? 'Sí' : 'No'),
+      },
+      {
+        header: 'Fecha',
+        accessor: (m) => {
+          if (!m.fecha_requerimiento) {
+            return m.created_at ? m.created_at.split('T')[0] : '—';
+          }
+          return m.fecha_requerimiento.split('T')[0];
+        },
+      },
     ];
 
-    const escapeCsv = (val: unknown): string => {
-      if (val === null || val === undefined) return '""';
-      const str = String(val);
-      return `"${str.replace(/"/g, '""')}"`;
-    };
-
-    const formatDate = (dateStr: string | null | undefined): string => {
-      if (!dateStr) return '';
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
-      try {
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) return String(dateStr);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
-      } catch {
-        return String(dateStr);
-      }
-    };
-
-    const rows = dataToExport.map((m) => {
-      const eq = equipos.find((e) => e.id === m.equipo_id);
-      const numeroInforme = m.numero_informe || '';
-      const equipoNombre = m.equipo_identificacion || eq?.nombre || '';
-      const codigoSerie = [m.codigo, eq?.serie].filter(Boolean).join(' / ');
-      const tipoMantenimiento = m.tipo_mantenimiento || '';
-      const fechaProgramada = formatDate(m.fecha_requerimiento);
-      const fechaRealizada = formatDate(m.fecha_cierre);
-      const responsable = m.asignado_a || m.completado_por || '';
-      const costoVal = (m as { costo?: number | string | null }).costo;
-      const costo = costoVal != null ? String(costoVal) : '';
-      const estado = m.estado_mantenimiento || '';
-      const diagnostico = m.diagnostico_final || '';
-
-      const obsParts: string[] = [];
-      if (m.problema_reportado) obsParts.push(`Problema: ${m.problema_reportado}`);
-      if (m.descripcion_trabajo_realizado) obsParts.push(`Trabajo: ${m.descripcion_trabajo_realizado}`);
-      if (m.repuestos_utilizados) obsParts.push(`Repuestos: ${m.repuestos_utilizados}`);
-      if (m.accesorios_adicionales) obsParts.push(`Accesorios: ${m.accesorios_adicionales}`);
-      const observaciones = obsParts.join(' | ') || m.problema_reportado || '';
-
-      return [
-        escapeCsv(numeroInforme),
-        escapeCsv(equipoNombre),
-        escapeCsv(codigoSerie),
-        escapeCsv(tipoMantenimiento),
-        escapeCsv(fechaProgramada),
-        escapeCsv(fechaRealizada),
-        escapeCsv(responsable),
-        escapeCsv(costo),
-        escapeCsv(estado),
-        escapeCsv(diagnostico),
-        escapeCsv(observaciones),
-      ].join(',');
-    });
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const fileName = `mantenimientos_export_${year}-${month}-${day}.csv`;
-
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', fileName);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    exportarACSV(filtered, columnas, 'Mantenimientos_Filtrados');
   }
 
-  const filtrosActivos = filtrosEstado.length + (filtroVencidos ? 1 : 0);
+  const filtrosActivos = useMemo(() => {
+    let count = 0;
+    if (search.trim() !== '') count++;
+    count += filtrosEstado.length;
+    if (filtroVencidos) count++;
+    Object.values(colFilters).forEach((v) => {
+      if (v.trim() !== '' && v.toLowerCase() !== 'todos' && v.toLowerCase() !== 'todas') {
+        count++;
+      }
+    });
+    return count;
+  }, [search, filtrosEstado, filtroVencidos, colFilters]);
+
+  const handleLimpiarTodosLosFiltros = () => {
+    setSearch('');
+    setFiltrosEstado([]);
+    setFiltroVencidos(false);
+    setColFilters({
+      codigo: '',
+      equipo: '',
+      tipo: '',
+      problema: '',
+      solicitado_por: '',
+      asignado_a: '',
+      fecha: '',
+      estado: '',
+    });
+    setSortConfig(null);
+  };
 
   return (
     <div>
@@ -633,152 +881,241 @@ export default function MantenimientosView({
       {/* Table */}
       <div className="mt-8 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
         <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <div className="relative flex-1 sm:max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por equipo, problema, solicitante..."
-              className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
-          </div>
-          <div className="flex flex-col items-start gap-2 sm:items-end">
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setMostrarFiltros((prev) => !prev)}
-                className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                  mostrarFiltros || filtrosActivos > 0
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                <Filter className="h-4 w-4" />
-                Filtros interactivos
-                {filtrosActivos > 0 && (
-                  <span className="rounded-full bg-white/20 px-1.5 py-0.5">{filtrosActivos}</span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                disabled={filtered.length === 0}
-                title={filtered.length === 0 ? 'No hay registros para exportar' : 'Exportar a CSV'}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none disabled:active:scale-100"
-              >
-                <Download className="h-4 w-4 text-slate-500" />
-                <span>Exportar a CSV</span>
-              </button>
+          <div className="flex flex-1 flex-col sm:flex-row sm:items-center gap-3">
+            <div className="relative flex-1 sm:max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por equipo, problema, solicitante, código..."
+                className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-9 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  title="Borrar búsqueda"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
 
-            {mostrarFiltros && (
-              <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 sm:w-auto">
-                <div className="flex flex-wrap items-center gap-2">
-                  {estadosM.map((estado) => {
-                    const active = filtrosEstado.includes(estado);
-                    return (
-                      <button
-                        key={estado}
-                        type="button"
-                        onClick={() => toggleEstadoFiltro(estado)}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                          active
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        {estado}
-                      </button>
-                    );
-                  })}
+            {/* Contador de resultados en tiempo real */}
+            <div className="text-xs text-slate-500 whitespace-nowrap">
+              Mostrando <span className="font-bold text-slate-900">{filtered.length}</span> de{' '}
+              <span className="font-bold text-slate-900">{mantenimientosBase.length}</span> registros
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Botón Limpiar todos los filtros (sólo visible y activo cuando hay filtros aplicados) */}
+            {filtrosActivos > 0 && (
+              <button
+                type="button"
+                id="btn-limpiar-todos-filtros-ot"
+                onClick={handleLimpiarTodosLosFiltros}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-100 hover:text-rose-800 transition active:scale-95 cursor-pointer"
+                title="Restablecer todos los filtros y búsqueda"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Limpiar todos los filtros ({filtrosActivos})</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setMostrarFiltros((prev) => !prev)}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors cursor-pointer ${
+                mostrarFiltros || filtrosEstado.length > 0 || filtroVencidos
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Filter className="h-4 w-4" />
+              <span>Filtros rápidos</span>
+              {(filtrosEstado.length > 0 || filtroVencidos) && (
+                <span className="rounded-full bg-white/20 px-1.5 py-0.5">
+                  {filtrosEstado.length + (filtroVencidos ? 1 : 0)}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              id="btn-exportar-mantenimientos-csv"
+              onClick={handleExportCSV}
+              disabled={filtered.length === 0}
+              title={
+                filtered.length === 0
+                  ? 'No hay registros visibles para exportar'
+                  : `Exportar ${filtered.length} registro(s) a Excel / CSV`
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none cursor-pointer"
+            >
+              <Download className="h-4 w-4 text-slate-500" />
+              <span>Exportar a Excel / CSV ({filtered.length})</span>
+            </button>
+          </div>
+        </div>
+
+        {mostrarFiltros && (
+          <div className="border-b border-slate-100 bg-slate-50/60 p-3 sm:px-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-slate-600 mr-1">Filtrar por estado:</span>
+              {estadosM.map((estado) => {
+                const active = filtrosEstado.includes(estado);
+                return (
                   <button
+                    key={estado}
                     type="button"
-                    onClick={() => setFiltroVencidos((prev) => !prev)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                      filtroVencidos
-                        ? 'bg-rose-600 text-white shadow-sm'
+                    onClick={() => toggleEstadoFiltro(estado)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-sm'
                         : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    Vencidos
+                    {estado}
                   </button>
-                  {filtrosActivos > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFiltrosEstado([]);
-                        setFiltroVencidos(false);
-                      }}
-                      className="px-2 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
-                    >
-                      Limpiar filtros
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-        {filtrosActivos > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3 sm:px-5">
-            <span className="text-xs font-medium text-slate-500">Filtros activos:</span>
-            {filtrosEstado.map((estado) => (
-              <button
-                key={estado}
-                type="button"
-                onClick={() => toggleEstadoFiltro(estado)}
-                className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-600/20"
-              >
-                {estado}
-                <span aria-hidden="true">×</span>
-              </button>
-            ))}
-            {filtroVencidos && (
+                );
+              })}
               <button
                 type="button"
-                onClick={() => setFiltroVencidos(false)}
-                className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-600/20"
+                onClick={() => setFiltroVencidos((prev) => !prev)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                  filtroVencidos
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100'
+                }`}
               >
                 Vencidos
-                <span aria-hidden="true">×</span>
               </button>
-            )}
+              {(filtrosEstado.length > 0 || filtroVencidos) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFiltrosEstado([]);
+                    setFiltroVencidos(false);
+                  }}
+                  className="px-2 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                >
+                  Restablecer estados
+                </button>
+              )}
+            </div>
           </div>
         )}
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[960px] text-left">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/50">
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Código
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Equipo
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Tipo
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Problema
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Solicitado por
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Asignado a
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Fecha
-                </th>
-                <th className="px-5 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Estado
-                </th>
-                <th className="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Acciones
-                </th>
+              <tr className="border-b border-slate-200">
+                <TableColumnHeader
+                  id="th-mant-codigo"
+                  title="Código"
+                  sortKey="codigo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.codigo}
+                  onFilterChange={(v) => handleColumnFilterChange('codigo', v)}
+                  placeholder="Filtrar código..."
+                  className="min-w-[130px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-equipo"
+                  title="Equipo"
+                  sortKey="equipo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.equipo}
+                  onFilterChange={(v) => handleColumnFilterChange('equipo', v)}
+                  placeholder="Filtrar equipo..."
+                  className="min-w-[180px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-tipo"
+                  title="Tipo"
+                  sortKey="tipo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.tipo}
+                  onFilterChange={(v) => handleColumnFilterChange('tipo', v)}
+                  selectOptions={uniqueTipos}
+                  className="min-w-[120px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-problema"
+                  title="Problema"
+                  sortKey="problema"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.problema}
+                  onFilterChange={(v) => handleColumnFilterChange('problema', v)}
+                  placeholder="Filtrar problema..."
+                  className="min-w-[160px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-solicitado"
+                  title="Solicitado por"
+                  sortKey="solicitado_por"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.solicitado_por}
+                  onFilterChange={(v) => handleColumnFilterChange('solicitado_por', v)}
+                  selectOptions={uniqueSolicitadosPor}
+                  className="min-w-[150px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-asignado"
+                  title="Asignado a"
+                  sortKey="asignado_a"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.asignado_a}
+                  onFilterChange={(v) => handleColumnFilterChange('asignado_a', v)}
+                  selectOptions={uniqueAsignadosA}
+                  className="min-w-[140px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-fecha"
+                  title="Fecha"
+                  sortKey="fecha"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.fecha}
+                  onFilterChange={(v) => handleColumnFilterChange('fecha', v)}
+                  placeholder="Filtrar fecha..."
+                  className="min-w-[110px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-estado"
+                  title="Estado"
+                  sortKey="estado"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.estado}
+                  onFilterChange={(v) => handleColumnFilterChange('estado', v)}
+                  selectOptions={uniqueEstados}
+                  className="min-w-[140px]"
+                />
+                <TableColumnHeader
+                  id="th-mant-acciones"
+                  title="Acciones"
+                  align="right"
+                  filterType="none"
+                  className="min-w-[100px]"
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

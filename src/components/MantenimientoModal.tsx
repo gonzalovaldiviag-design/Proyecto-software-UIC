@@ -75,6 +75,7 @@ export interface MantenimientoFormData {
   estado_solicitud_externalizacion?: 'Ninguna' | 'Pendiente_Aprobacion' | 'Aprobada' | 'Rechazada' | null;
   motivo_externalizacion?: string | null;
   externalizacion_solicitada_por?: string | null;
+  solicitante_externalizacion?: string | null;
   externalizacion_resuelta_por?: string | null;
 }
 
@@ -105,10 +106,11 @@ export default function MantenimientoModal({
     puede,
     esAdmin,
     esSupervisor,
-    esTecnico,
   } = useAuth();
 
-  const esRolTecnico = usuarioActivo?.rol === 'Ingeniero de Servicio / Técnico';
+  const usuarioActual = usuarioActivo;
+  const esTecnico = usuarioActual?.rol === 'Ingeniero de Servicio / Técnico';
+  const esRolTecnico = esTecnico;
 
   const usuariosAsignables = useMemo(() => {
     return (usuarios || []).filter((u) => {
@@ -724,6 +726,7 @@ export default function MantenimientoModal({
         estado_solicitud_externalizacion: estadoSolicitudExternalizacion,
         motivo_externalizacion: (motivoExternalizacion || '').trim() || null,
         externalizacion_solicitada_por: (externalizacionSolicitadaPor || '').trim() || null,
+        solicitante_externalizacion: (externalizacionSolicitadaPor || usuarioActual?.nombre || '').trim() || null,
         externalizacion_resuelta_por: (externalizacionResueltaPor || '').trim() || null,
       });
 
@@ -747,16 +750,54 @@ export default function MantenimientoModal({
           await supabase.from('notificaciones').insert({
             destinatario_rol: 'Ingeniero Supervisor',
             destinatario_id: null,
+            destinatario_nombre: null,
             titulo: `Solicitud de Externalización — ${mantenimientoEdicion?.codigo || 'Nueva OT'}`,
             mensaje: `El técnico ${externalizacionSolicitadaPor || usuarioActivo?.nombre || 'Técnico'} solicita externalización para la OT ${mantenimientoEdicion?.codigo || ''} (${finalEquipoIdentificacion}).\nModalidad: ${tipoExternalizacion}.\nMotivo: ${(motivoExternalizacion || '').trim() || finalProblema}`,
             tipo: 'solicitud_externalizacion',
             leida: false,
             mantenimiento_id: mantenimientoEdicion?.id || null,
             codigo_mantenimiento: mantenimientoEdicion?.codigo || null,
+            codigo_mantenimiento_ref: mantenimientoEdicion?.codigo || null,
           });
           window.dispatchEvent(new CustomEvent('notificaciones_updated'));
         } catch (notifErr) {
           console.warn('Error creando notificación de externalización:', notifErr);
+        }
+      }
+
+      // Notificación de Asignación / Reasignación de OT para el técnico (tipo 'ot_asignada')
+      const asignadoPreviamente = mantenimientoEdicion?.asignado_a?.trim() || null;
+      const nuevoAsignado = finalAsignadoA?.trim() || null;
+
+      if (nuevoAsignado && nuevoAsignado !== asignadoPreviamente) {
+        try {
+          let tecnicoId: string | null = null;
+          const { data: uData } = await supabase.from('perfiles').select('*');
+          if (uData && Array.isArray(uData)) {
+            const u = uData.find(
+              (usr) => usr.nombre?.toLowerCase() === nuevoAsignado.toLowerCase()
+            );
+            if (u) tecnicoId = u.id;
+          }
+
+          const codOT = mantenimientoEdicion?.codigo || 'Nueva OT';
+          const servClinico = (solicitadoPor || mantenimientoEdicion?.solicitado_por || 'Servicio Clínico').trim();
+
+          await supabase.from('notificaciones').insert({
+            destinatario_rol: 'Ingeniero de Servicio / Técnico',
+            destinatario_id: tecnicoId,
+            destinatario_nombre: nuevoAsignado,
+            titulo: `Nueva OT Asignada: ${codOT}`,
+            mensaje: `Se te ha asignado la orden para el equipo ${finalEquipoIdentificacion} del servicio ${servClinico}.`,
+            tipo: 'ot_asignada',
+            leida: false,
+            mantenimiento_id: mantenimientoEdicion?.id || null,
+            codigo_mantenimiento: codOT,
+            codigo_mantenimiento_ref: codOT,
+          });
+          window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        } catch (asigErr) {
+          console.warn('Error notificando asignación de OT:', asigErr);
         }
       }
 
@@ -767,15 +808,32 @@ export default function MantenimientoModal({
         (estadoSolicitudExternalizacion === 'Aprobada' || estadoSolicitudExternalizacion === 'Rechazada')
       ) {
         try {
+          const tecName = mantenimientoEdicion.externalizacion_solicitada_por || mantenimientoEdicion.asignado_a || null;
+          let tecId: string | null = null;
+          if (tecName) {
+            const { data: uData } = await supabase.from('perfiles').select('*');
+            if (uData && Array.isArray(uData)) {
+              const u = uData.find((usr) => usr.nombre?.toLowerCase() === tecName.toLowerCase());
+              if (u) tecId = u.id;
+            }
+          }
+
+          const esAprobada = estadoSolicitudExternalizacion === 'Aprobada';
           await supabase.from('notificaciones').insert({
             destinatario_rol: 'Ingeniero de Servicio / Técnico',
-            destinatario_id: null,
-            titulo: `Externalización ${estadoSolicitudExternalizacion === 'Aprobada' ? 'Aprobada' : 'Rechazada'} — ${mantenimientoEdicion.codigo}`,
-            mensaje: `El supervisor ${usuarioActivo?.nombre} ha ${estadoSolicitudExternalizacion === 'Aprobada' ? 'APROBADO' : 'RECHAZADO'} la solicitud de externalización para la OT ${mantenimientoEdicion.codigo} (${finalEquipoIdentificacion}).`,
-            tipo: estadoSolicitudExternalizacion === 'Aprobada' ? 'info' : 'alerta',
+            destinatario_id: tecId,
+            destinatario_nombre: tecName,
+            titulo: esAprobada
+              ? `Externalización Autorizada: ${mantenimientoEdicion.codigo}`
+              : `Externalización Desestimada: ${mantenimientoEdicion.codigo}`,
+            mensaje: esAprobada
+              ? 'El requerimiento de compra/servicio externo fue aprobado e ingresado a Compras.'
+              : 'La solicitud fue rechazada por supervisión. La OT debe resolverse por vía interna.',
+            tipo: esAprobada ? 'externalizacion_aprobada' : 'externalizacion_rechazada',
             leida: false,
             mantenimiento_id: mantenimientoEdicion.id,
             codigo_mantenimiento: mantenimientoEdicion.codigo,
+            codigo_mantenimiento_ref: mantenimientoEdicion.codigo,
           });
           window.dispatchEvent(new CustomEvent('notificaciones_updated'));
         } catch (notifErr) {
@@ -1031,10 +1089,11 @@ export default function MantenimientoModal({
             </div>
             {modoEquipo === 'registrado' ? (
               <select
-                disabled={esRolTecnico}
+                id="equipo_id"
+                disabled={esTecnico}
                 className={`${inputClass} ${
-                  esRolTecnico
-                    ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                  esTecnico
+                    ? 'bg-gray-100 cursor-not-allowed text-slate-700 border-slate-200 select-none focus:ring-0 focus:border-slate-200'
                     : ''
                 }`}
                 value={equipoId}
@@ -1049,11 +1108,12 @@ export default function MantenimientoModal({
               </select>
             ) : (
               <input
-                disabled={esRolTecnico}
-                readOnly={esRolTecnico}
+                id="equipo_id"
+                disabled={esTecnico}
+                readOnly={esTecnico}
                 className={`${inputClass} ${
-                  esRolTecnico
-                    ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                  esTecnico
+                    ? 'bg-gray-100 cursor-not-allowed text-slate-700 border-slate-200 select-none focus:ring-0 focus:border-slate-200'
                     : ''
                 }`}
                 value={equipoManual}
@@ -1069,10 +1129,10 @@ export default function MantenimientoModal({
           {/* Problema */}
           <div className="mb-4">
             <div className="mb-1.5 flex items-center justify-between">
-              <label className="block text-sm font-medium text-slate-700">
+              <label htmlFor="problema_reportado" className="block text-sm font-medium text-slate-700">
                 Problema reportado o causa <span className="text-rose-500">*</span>
               </label>
-              {esRolTecnico && (
+              {esTecnico && (
                 <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
                   <Lock className="h-3 w-3 text-slate-400" />
                   <span>Reporte clínico original (Solo lectura)</span>
@@ -1080,11 +1140,11 @@ export default function MantenimientoModal({
               )}
             </div>
             <textarea
-              disabled={esRolTecnico}
-              readOnly={esRolTecnico}
+              id="problema_reportado"
+              readOnly={esTecnico}
               className={`${inputClass} min-h-[75px] resize-y ${
-                esRolTecnico
-                  ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200 resize-none'
+                esTecnico
+                  ? 'bg-gray-100 cursor-not-allowed text-slate-700 border-slate-200 select-none focus:ring-0 focus:border-slate-200 resize-none'
                   : ''
               }`}
               value={problema}
@@ -1119,7 +1179,7 @@ export default function MantenimientoModal({
                   Asignado a (Técnico / Responsable){' '}
                   {asignadoRequerido && <span className="text-rose-500">*</span>}
                 </label>
-                {esRolTecnico && (
+                {esTecnico && (
                   <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
                     <Lock className="h-3 w-3 text-slate-400" />
                     <span>No reasignable</span>
@@ -1128,26 +1188,27 @@ export default function MantenimientoModal({
               </div>
               <div ref={asignadoContainerRef} className="relative">
                 <button
+                  id="asignado_a"
                   ref={asignadoInputRef}
                   type="button"
-                  disabled={esRolTecnico}
+                  disabled={esTecnico}
                   onClick={() => {
-                    if (esRolTecnico) return;
+                    if (esTecnico) return;
                     setAsignadoDropdownOpen((prev) => !prev);
                   }}
                   onKeyDown={(e) => {
-                    if (esRolTecnico) return;
+                    if (esTecnico) return;
                     if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       setAsignadoDropdownOpen(true);
                     }
                   }}
                   className={`${inputClass} flex items-center justify-between text-left transition ${
-                    esRolTecnico
-                      ? '!bg-gray-100 !text-slate-700 !border-slate-200 cursor-not-allowed select-none focus:!ring-0 focus:!border-slate-200'
+                    esTecnico
+                      ? 'bg-gray-100 cursor-not-allowed text-slate-700 border-slate-200 select-none focus:ring-0 focus:border-slate-200'
                       : 'cursor-pointer'
                   } ${
-                    !esRolTecnico &&
+                    !esTecnico &&
                     (((touched && asignadoRequerido && !(asignadoA || '').trim()) ||
                       (estadoError && !(asignadoA || '').trim())))
                       ? '!border-rose-400 focus:!border-rose-500 focus:!ring-rose-200'
@@ -1361,29 +1422,29 @@ export default function MantenimientoModal({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <div className="mb-1.5 flex items-center justify-between">
-                <label className="block text-sm font-medium text-slate-700">
+                <label htmlFor="tipo_mantenimiento" className="block text-sm font-medium text-slate-700">
                   Tipo de mantenimiento
                 </label>
-                {esRolTecnico && (
+                {esTecnico && (
                   <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
                     <Lock className="h-3 w-3 text-slate-400" />
                     <span>Fijo</span>
                   </span>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div id="tipo_mantenimiento" className="flex gap-2">
                 {(['Correctivo', 'Preventivo'] as TipoMantenimiento[]).map((t) => (
                   <button
                     key={t}
                     type="button"
-                    disabled={esRolTecnico}
+                    disabled={esTecnico}
                     onClick={() => setTipo(t)}
                     className={`flex-1 rounded-lg border py-2 text-xs font-semibold transition-all ${
                       tipo === t
-                        ? esRolTecnico
+                        ? esTecnico
                           ? 'border-slate-300 bg-gray-100 text-slate-700 cursor-not-allowed shadow-none'
                           : 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm'
-                        : esRolTecnico
+                        : esTecnico
                           ? 'border-slate-200 bg-gray-100 text-slate-400 cursor-not-allowed opacity-60'
                           : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                     }`}
@@ -1408,7 +1469,17 @@ export default function MantenimientoModal({
 
           {/* SECCIÓN EXTERNALIZACIÓN / COMPRA EXTERNA (FLUJO DE APROBACIÓN TÉCNICO - SUPERVISOR) */}
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 transition-all">
-            {solicitudEnviadaAviso && (
+            {/* Banner informativo color ámbar cuando la solicitud está enviada / pendiente de revisión */}
+            {estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' && (
+              <div className="mb-3.5 flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 shadow-xs">
+                <Clock className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5 animate-pulse" />
+                <div className="flex-1 font-semibold leading-relaxed">
+                  Solicitud de externalización enviada. Pendiente de revisión por el Ingeniero Supervisor.
+                </div>
+              </div>
+            )}
+
+            {solicitudEnviadaAviso && estadoSolicitudExternalizacion !== 'Pendiente_Aprobacion' && (
               <div className="mb-3 flex items-center justify-between rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900">
                 <div className="flex items-center gap-1.5">
                   <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
@@ -1457,7 +1528,7 @@ export default function MantenimientoModal({
                     )}
                   </div>
                   <div className="text-xs text-slate-500">
-                    {esRolTecnico
+                    {esTecnico
                       ? 'Los técnicos deben justificar y solicitar autorización al Ingeniero Supervisor para compras o derivaciones.'
                       : 'Activar si esta OT requiere compra de repuestos clínicos o contratación de servicio tercerizado.'}
                   </div>
@@ -1465,7 +1536,7 @@ export default function MantenimientoModal({
               </div>
 
               {/* Botón o Conmutador dependiente del perfil */}
-              {esRolTecnico ? (
+              {esTecnico ? (
                 <div>
                   {estadoSolicitudExternalizacion === 'Aprobada' ? (
                     <label className="relative inline-flex cursor-pointer items-center flex-shrink-0">
@@ -1483,32 +1554,41 @@ export default function MantenimientoModal({
                         {requiereExternalizacion ? 'Sí' : 'No'}
                       </span>
                     </label>
-                  ) : estadoSolicitudExternalizacion === 'Pendiente_Aprobacion' ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMotivoInput(motivoExternalizacion || '');
-                        setTipoExtInput(tipoExternalizacion);
-                        setModalJustificacionOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-100/70 px-2.5 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-200/70 transition shadow-2xs"
-                    >
-                      <Clock className="h-3.5 w-3.5 text-amber-600" />
-                      <span>Ver Solicitud</span>
-                    </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMotivoInput(motivoExternalizacion || '');
-                        setTipoExtInput(tipoExternalizacion);
-                        setModalJustificacionOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50 transition shadow-2xs active:scale-95"
-                    >
-                      <Send className="h-3.5 w-3.5 text-blue-600" />
-                      <span>Solicitar a Supervisor</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <label
+                        className="relative inline-flex cursor-pointer items-center flex-shrink-0"
+                        title="Solicitar externalización a supervisión"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={estadoSolicitudExternalizacion === 'Pendiente_Aprobacion'}
+                          onChange={() => {
+                            setMotivoInput(motivoExternalizacion || '');
+                            setTipoExtInput(tipoExternalizacion || 'Compra de repuesto por Informe de requerimiento');
+                            setModalJustificacionOpen(true);
+                          }}
+                          className="peer sr-only"
+                        />
+                        <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-amber-500 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-amber-500/20" />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMotivoInput(motivoExternalizacion || '');
+                          setTipoExtInput(tipoExternalizacion || 'Compra de repuesto por Informe de requerimiento');
+                          setModalJustificacionOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 transition shadow-2xs active:scale-95"
+                      >
+                        <Send className="h-3.5 w-3.5 text-amber-600" />
+                        <span>
+                          {estadoSolicitudExternalizacion === 'Pendiente_Aprobacion'
+                            ? 'Ver / Editar Solicitud'
+                            : 'Solicitar Externalización a Supervisión'}
+                        </span>
+                      </button>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -1795,19 +1875,20 @@ export default function MantenimientoModal({
                   En proceso
                 </span>
               )}
-              {estado === 'Pendiente de Asignación' && !esRolTecnico && (
+              {estado === 'Pendiente de Asignación' && !esTecnico && (
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
                   Pendiente de Asignación
                 </span>
               )}
             </div>
             <div
+              id="selector_estado"
               className={`grid grid-cols-1 gap-2 ${
-                esRolTecnico ? 'sm:grid-cols-2' : 'sm:grid-cols-3'
+                esTecnico ? 'sm:grid-cols-2' : 'sm:grid-cols-3'
               }`}
             >
               {(
-                (esRolTecnico
+                (esTecnico
                   ? ['En proceso', 'Completado']
                   : ['Pendiente de Asignación', 'En proceso', 'Completado']) as EstadoMantenimiento[]
               ).map((est) => {
@@ -2330,28 +2411,32 @@ export default function MantenimientoModal({
         </form>
       </div>
 
-      {/* DIÁLOGO / MODAL DE JUSTIFICACIÓN TÉCNICA DE EXTERNALIZACIÓN */}
+      {/* DIÁLOGO / SUBMODAL DE SOLICITUD DE EXTERNALIZACIÓN A SUPERVISIÓN */}
       {modalJustificacionOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+        <div
+          id="submodal-solicitar-externalizacion"
+          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-slate-900/10">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
                   <Send className="h-4 w-4" />
                 </div>
-                <span>Solicitud Técnica de Externalización</span>
+                <span>Solicitar Externalización a Supervisión</span>
               </div>
               <button
                 type="button"
                 onClick={() => setModalJustificacionOpen(false)}
-                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg transition-colors"
+                aria-label="Cerrar modal"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             <p className="mt-3 text-xs text-slate-500 leading-relaxed">
-              Como Técnico de Servicio, la compra de repuestos o tercerización externa requiere el visto bueno formal del Ingeniero Supervisor. Por favor justifica técnicamente la necesidad.
+              Como Técnico de Servicio, el requerimiento de compras o servicio técnico externo debe ser justificado técnicamente para su evaluación y aprobación por parte del Ingeniero Supervisor.
             </p>
 
             {justificacionError && (
@@ -2362,48 +2447,47 @@ export default function MantenimientoModal({
 
             <div className="mt-4 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Modalidad de Adquisición Solicitada <span className="text-rose-500">*</span>
+                <label htmlFor="modalidad_sugerida" className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Modalidad sugerida <span className="text-rose-500">*</span>
                 </label>
-                <div className="space-y-1.5">
-                  {TIPOS_EXTERNALIZACION.map((tipo) => (
-                    <label
-                      key={tipo}
-                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs cursor-pointer transition ${
-                        tipoExtInput === tipo
-                          ? 'border-blue-500 bg-blue-50/70 font-semibold text-blue-950 ring-1 ring-blue-500/20'
-                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="modalidad_externalizacion"
-                        checked={tipoExtInput === tipo}
-                        onChange={() => setTipoExtInput(tipo)}
-                        className="mt-0.5 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span>{tipo}</span>
-                    </label>
-                  ))}
-                </div>
+                <select
+                  id="modalidad_sugerida"
+                  name="modalidad_sugerida"
+                  value={tipoExtInput}
+                  onChange={(e) => setTipoExtInput(e.target.value as TipoExternalizacion)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                >
+                  <option value="Compra de repuesto por fondo fijo">
+                    Compra de repuesto por fondo fijo
+                  </option>
+                  <option value="Compra de repuesto por Informe de requerimiento">
+                    Compra de repuesto por Informe de requerimiento
+                  </option>
+                  <option value="Compra de servicio de mantenimiento o reparación externa">
+                    Compra de servicio de mantenimiento o reparación externa
+                  </option>
+                </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Motivo / Justificación Técnica Detallada <span className="text-rose-500">*</span>
+                <label htmlFor="motivo_externalizacion" className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Motivo de externalización <span className="text-rose-500">*</span>
                 </label>
                 <textarea
+                  id="motivo_externalizacion"
+                  name="motivo_externalizacion"
                   rows={4}
+                  required
                   value={motivoInput}
                   onChange={(e) => {
                     setMotivoInput(e.target.value);
                     if (justificacionError) setJustificacionError('');
                   }}
-                  placeholder="Ej: Falla en fuente de poder de alta tensión que sobrepasa el instrumental de calibración del taller local. Se requiere repuesto original código X-402 o derivación a servicio técnico autorizado del fabricante..."
+                  placeholder="Justificación técnica de por qué se requiere compra o servicio externo..."
                   className="w-full rounded-lg border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 />
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Menciona repuestos específicos, pruebas realizadas o por qué no es posible resolver internamente.
+                  Justificación técnica de por qué se requiere compra o servicio externo (obligatorio).
                 </p>
               </div>
             </div>
@@ -2412,29 +2496,63 @@ export default function MantenimientoModal({
               <button
                 type="button"
                 onClick={() => setModalJustificacionOpen(false)}
-                className="rounded-lg px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                className="rounded-lg px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
               >
                 Cancelar
               </button>
               <button
+                id="btn-confirmar-submodal-externalizacion"
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   if (!motivoInput.trim()) {
-                    setJustificacionError('Debes ingresar la justificación técnica para enviar la solicitud al supervisor.');
+                    setJustificacionError('El motivo de externalización es obligatorio. Por favor ingresa la justificación técnica.');
                     return;
                   }
+                  const motivoLimpio = motivoInput.trim();
+                  const tecnicoSolicitante = usuarioActual?.nombre || 'Técnico de Servicio';
+                  const modalidad = tipoExtInput;
+
                   setEstadoSolicitudExternalizacion('Pendiente_Aprobacion');
-                  setMotivoExternalizacion(motivoInput.trim());
-                  setTipoExternalizacion(tipoExtInput);
-                  setExternalizacionSolicitadaPor(usuarioActivo?.nombre || 'Técnico');
+                  setMotivoExternalizacion(motivoLimpio);
+                  setTipoExternalizacion(modalidad);
+                  setExternalizacionSolicitadaPor(tecnicoSolicitante);
                   setRequiereExternalizacion(false);
-                  setSolicitudEnviadaAviso('Solicitud de externalización registrada. Al guardar la orden de trabajo quedará pendiente de aprobación en la bandeja del Ingeniero Supervisor.');
                   setModalJustificacionOpen(false);
+
+                  // Si se está editando una OT existente, persistir inmediatamente la solicitud y la notificación para el Ingeniero Supervisor
+                  if (mantenimientoEdicion?.id) {
+                    try {
+                      await supabase.from('mantenimientos').update({
+                        estado_solicitud_externalizacion: 'Pendiente_Aprobacion',
+                        motivo_externalizacion: motivoLimpio,
+                        tipo_externalizacion: modalidad,
+                        externalizacion_solicitada_por: tecnicoSolicitante,
+                        solicitante_externalizacion: tecnicoSolicitante,
+                        requiere_externalizacion: false,
+                      }).eq('id', mantenimientoEdicion.id);
+
+                      await supabase.from('notificaciones').insert({
+                        destinatario_rol: 'Ingeniero Supervisor',
+                        destinatario_id: null,
+                        titulo: `Solicitud de Externalización — ${mantenimientoEdicion.codigo}`,
+                        mensaje: `El técnico ${tecnicoSolicitante} solicita externalización para la OT ${mantenimientoEdicion.codigo} (${mantenimientoEdicion.equipo_identificacion}).\nModalidad sugerida: ${modalidad}.\nMotivo: ${motivoLimpio}`,
+                        tipo: 'solicitud_externalizacion',
+                        leida: false,
+                        mantenimiento_id: mantenimientoEdicion.id,
+                        codigo_mantenimiento: mantenimientoEdicion.codigo,
+                      });
+
+                      window.dispatchEvent(new CustomEvent('mantenimientos_updated'));
+                      window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+                    } catch (err) {
+                      console.warn('Error al persistir solicitud de externalización:', err);
+                    }
+                  }
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-blue-700 active:scale-95 transition"
               >
                 <Send className="h-3.5 w-3.5" />
-                <span>Enviar Solicitud a Supervisor</span>
+                <span>Enviar Solicitud a Supervisión</span>
               </button>
             </div>
           </div>

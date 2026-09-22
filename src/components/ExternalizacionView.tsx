@@ -20,6 +20,7 @@ import {
   X,
   Download,
   Link2,
+  RotateCcw,
 } from 'lucide-react';
 import {
   type Equipo,
@@ -37,6 +38,8 @@ import {
 import ActualizarEtapaCompraModal from './ActualizarEtapaCompraModal';
 import ExternalizacionModal from './ExternalizacionModal';
 import { useAuth } from '@/lib/authContext';
+import TableColumnHeader, { ColumnSortState } from '@/components/TableColumnHeader';
+import { exportarACSV, type ExportColumn } from '@/utils/exportUtils';
 
 interface ExternalizacionViewProps {
   equipos: Equipo[];
@@ -56,6 +59,70 @@ export default function ExternalizacionView({
   const [search, setSearch] = useState('');
   const [etapaFiltro, setEtapaFiltro] = useState<string>('todos');
   const [origenFiltro, setOrigenFiltro] = useState<string>('todos');
+
+  // Subfiltros interactivos por encabezado de columna (th)
+  const [colFilters, setColFilters] = useState<{
+    codigo: string;
+    origen: string;
+    tipo: string;
+    equipo: string;
+    solicitante: string;
+    etapa: string;
+    monto_oc: string;
+  }>({
+    codigo: '',
+    origen: '',
+    tipo: '',
+    equipo: '',
+    solicitante: '',
+    etapa: '',
+    monto_oc: '',
+  });
+
+  const [sortConfig, setSortConfig] = useState<ColumnSortState | null>(null);
+
+  const handleSort = (key: string) => {
+    setSortConfig((prev) => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const handleColumnFilterChange = (key: keyof typeof colFilters, value: string) => {
+    setColFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // Opciones únicas para selects de subfiltros
+  const uniqueOrigenes = useMemo(() => {
+    return ['Línea A: OT Mantenimiento', 'Línea B: Solicitud Directa'];
+  }, []);
+
+  const uniqueTiposAdquisicion = useMemo(() => {
+    const set = new Set<string>();
+    items.forEach((i) => {
+      if (i.tipo_adquisicion && i.tipo_adquisicion.trim()) {
+        set.add(i.tipo_adquisicion.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const uniqueSolicitantes = useMemo(() => {
+    const set = new Set<string>();
+    items.forEach((i) => {
+      if (i.solicitante && i.solicitante.trim()) {
+        set.add(i.solicitante.trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const uniqueEtapas = useMemo(() => {
+    return ETAPAS_ORDEN;
+  }, []);
 
   // Supabase Table Status & SQL Modal
   const [supabaseStatus, setSupabaseStatus] = useState<{ exists: boolean; message?: string } | null>(null);
@@ -137,9 +204,128 @@ export default function ExternalizacionView({
         if (item.origen !== origenFiltro) return false;
       }
 
+      // Subfiltros interactivos por encabezados de columna (AND aditivo)
+      if (colFilters.codigo.trim()) {
+        const c = colFilters.codigo.trim().toLowerCase();
+        if (!item.codigo?.toLowerCase().includes(c)) return false;
+      }
+      if (colFilters.origen.trim() && colFilters.origen.toLowerCase() !== 'todos') {
+        const o = colFilters.origen.trim().toLowerCase();
+        const matchesMantenimiento = o.includes('mantenimiento') || o.includes('línea a') || o.includes('ot');
+        const matchesDirecta = o.includes('directa') || o.includes('línea b');
+        if (matchesMantenimiento && item.origen !== 'mantenimiento') return false;
+        if (matchesDirecta && item.origen !== 'directa') return false;
+      }
+      if (
+        colFilters.tipo.trim() &&
+        colFilters.tipo.toLowerCase() !== 'todos' &&
+        colFilters.tipo.toLowerCase() !== 'todas'
+      ) {
+        const t = colFilters.tipo.trim().toLowerCase();
+        if (!item.tipo_adquisicion || !item.tipo_adquisicion.toLowerCase().includes(t)) return false;
+      }
+      if (colFilters.equipo.trim()) {
+        const eq = colFilters.equipo.trim().toLowerCase();
+        const matchEq =
+          (item.equipo_identificacion && item.equipo_identificacion.toLowerCase().includes(eq)) ||
+          (item.descripcion && item.descripcion.toLowerCase().includes(eq));
+        if (!matchEq) return false;
+      }
+      if (colFilters.solicitante.trim() && colFilters.solicitante.toLowerCase() !== 'todos') {
+        const s = colFilters.solicitante.trim().toLowerCase();
+        if (!item.solicitante || !item.solicitante.toLowerCase().includes(s)) return false;
+      }
+      if (colFilters.etapa.trim() && colFilters.etapa.toLowerCase() !== 'todos') {
+        const et = colFilters.etapa.trim().toLowerCase();
+        if (!item.etapa_actual || !item.etapa_actual.toLowerCase().includes(et)) return false;
+      }
+      if (colFilters.monto_oc.trim()) {
+        const moc = colFilters.monto_oc.trim().toLowerCase();
+        const matchOc = item.numero_oc && item.numero_oc.toLowerCase().includes(moc);
+        const matchMonto = item.monto_estimado !== undefined && item.monto_estimado !== null && item.monto_estimado.toString().includes(moc);
+        if (!matchOc && !matchMonto) return false;
+      }
+
       return true;
     });
-  }, [items, search, etapaFiltro, origenFiltro]);
+
+    // Ordenamiento por encabezado de columna
+    if (sortConfig) {
+      const { key, direction } = sortConfig;
+      const factor = direction === 'asc' ? 1 : -1;
+      return [...res].sort((a, b) => {
+        let valA = '';
+        let valB = '';
+        switch (key) {
+          case 'codigo':
+            valA = a.codigo || '';
+            valB = b.codigo || '';
+            break;
+          case 'origen':
+            valA = a.origen || '';
+            valB = b.origen || '';
+            break;
+          case 'tipo':
+            valA = a.tipo_adquisicion || '';
+            valB = b.tipo_adquisicion || '';
+            break;
+          case 'equipo':
+            valA = a.equipo_identificacion || a.descripcion || '';
+            valB = b.equipo_identificacion || b.descripcion || '';
+            break;
+          case 'solicitante':
+            valA = a.solicitante || '';
+            valB = b.solicitante || '';
+            break;
+          case 'etapa': {
+            const indexA = ETAPAS_ORDEN.indexOf(a.etapa_actual);
+            const indexB = ETAPAS_ORDEN.indexOf(b.etapa_actual);
+            return (indexA - indexB) * factor;
+          }
+          case 'monto_oc': {
+            const mA = a.monto_estimado || 0;
+            const mB = b.monto_estimado || 0;
+            return (mA - mB) * factor;
+          }
+          default:
+            return 0;
+        }
+        return valA.localeCompare(valB) * factor;
+      });
+    }
+
+    return res;
+  }, [items, search, etapaFiltro, origenFiltro, colFilters, sortConfig]);
+
+  // Contador de filtros activos
+  const filtrosActivos = useMemo(() => {
+    let count = 0;
+    if (search.trim() !== '') count++;
+    if (etapaFiltro !== 'todos') count++;
+    if (origenFiltro !== 'todos') count++;
+    Object.values(colFilters).forEach((val) => {
+      if (val.trim() !== '' && val.toLowerCase() !== 'todos' && val.toLowerCase() !== 'todas') {
+        count++;
+      }
+    });
+    return count;
+  }, [search, etapaFiltro, origenFiltro, colFilters]);
+
+  const handleLimpiarTodosLosFiltros = () => {
+    setSearch('');
+    setEtapaFiltro('todos');
+    setOrigenFiltro('todos');
+    setColFilters({
+      codigo: '',
+      origen: '',
+      tipo: '',
+      equipo: '',
+      solicitante: '',
+      etapa: '',
+      monto_oc: '',
+    });
+    setSortConfig(null);
+  };
 
   const handleOpenGestion = (ext: Externalizacion) => {
     if (!puedeGestionar) return;
@@ -171,114 +357,69 @@ export default function ExternalizacionView({
   };
 
   const handleExportCSV = () => {
-    const hasFilterOrSearch =
-      (search || '').trim() !== '' || etapaFiltro !== 'todos' || origenFiltro !== 'todos';
-    const dataToExport = hasFilterOrSearch ? filteredItems : items;
+    if (filteredItems.length === 0) return;
 
-    if (dataToExport.length === 0) return;
-
-    const headers = [
-      'Código EXT',
-      'Origen',
-      'OT Mantenimiento',
-      'Tipo Adquisición',
-      'Descripción Requerimiento',
-      'Equipo Asociado',
-      'Ubicación',
-      'Marca',
-      'Modelo',
-      'Serie',
-      'Código Equipo',
-      'Solicitante',
-      'Etapa Actual',
-      'Monto Estimado (CLP)',
-      'Folio Informe Req',
-      'Fecha Informe Req',
-      'Folio Solicitud Compra',
-      'Fecha Solicitud Compra',
-      'N° Orden de Compra (OC)',
-      'Fecha OC',
-      'Fecha Recepción',
-      'Observaciones',
-      'Fecha Creación',
+    const columnas: ExportColumn<Externalizacion>[] = [
+      {
+        header: 'Código Seguimiento',
+        accessor: (item) => item.codigo,
+      },
+      {
+        header: 'OT Vinculada',
+        accessor: (item) =>
+          item.codigo_mantenimiento ||
+          item.codigo_mantenimiento_ref ||
+          (item.origen === 'directa' ? 'Solicitud Directa' : '—'),
+      },
+      {
+        header: 'Equipo',
+        accessor: (item) => {
+          let eq: Equipo | undefined;
+          if (item.equipo_id) eq = equipos.find((e) => e.id === item.equipo_id);
+          return eq?.nombre || item.equipo_identificacion || item.descripcion || '—';
+        },
+      },
+      {
+        header: 'Servicio',
+        accessor: (item) => {
+          let eq: Equipo | undefined;
+          if (item.equipo_id) eq = equipos.find((e) => e.id === item.equipo_id);
+          return (
+            (item as unknown as { servicio?: string }).servicio ||
+            (item as unknown as { ubicacion?: string }).ubicacion ||
+            eq?.ubicacion ||
+            '—'
+          );
+        },
+      },
+      {
+        header: 'Clasificación/Modalidad',
+        accessor: (item) =>
+          item.tipo_adquisicion ||
+          item.tipo ||
+          item.clasificacion ||
+          (item.origen === 'mantenimiento' ? 'Línea A: OT Mantenimiento' : 'Línea B: Solicitud Directa'),
+      },
+      {
+        header: 'Etapa Actual',
+        accessor: (item) => item.etapa_actual || '—',
+      },
+      {
+        header: 'Monto Estimado',
+        accessor: (item) =>
+          item.monto_estimado != null ? `$${item.monto_estimado.toLocaleString('es-CL')}` : '$0',
+      },
+      {
+        header: 'Solicitante',
+        accessor: (item) => item.solicitante || '—',
+      },
+      {
+        header: 'Fecha de Registro',
+        accessor: (item) => (item.created_at ? item.created_at.split('T')[0] : '—'),
+      },
     ];
 
-    const escapeCsv = (val: unknown): string => {
-      if (val === null || val === undefined) return '""';
-      const str = String(val);
-      return `"${str.replace(/"/g, '""')}"`;
-    };
-
-    const rows = dataToExport.map((item) => {
-      // Búsqueda del equipo asociado por ID o por identificación textual
-      let eq: Equipo | undefined;
-      if (item.equipo_id) {
-        eq = equipos.find((e) => e.id === item.equipo_id);
-      }
-      if (!eq && item.equipo_identificacion) {
-        const ident = item.equipo_identificacion.trim().toLowerCase();
-        eq = equipos.find((e) => {
-          const cod = e.codigo.toLowerCase();
-          const nom = e.nombre.toLowerCase();
-          return ident.startsWith(cod) || ident.includes(cod) || ident.includes(nom);
-        });
-      }
-
-      const equipoNombre = eq ? eq.nombre : (item.equipo_identificacion || 'Stock General / No aplica');
-      const ubicacion = eq?.ubicacion || '—';
-      const marca = eq?.marca || '—';
-      const modelo = eq?.modelo || '—';
-      const serie = eq?.serie || '—';
-      const codigoEq = eq?.codigo || '—';
-
-      const origenLabel =
-        item.origen === 'mantenimiento' ? 'Línea A: OT Mantenimiento' : 'Línea B: Solicitud Directa';
-      const otMnt = item.codigo_mantenimiento || '—';
-
-      return [
-        escapeCsv(item.codigo),
-        escapeCsv(origenLabel),
-        escapeCsv(otMnt),
-        escapeCsv(item.tipo),
-        escapeCsv(item.descripcion),
-        escapeCsv(equipoNombre),
-        escapeCsv(ubicacion),
-        escapeCsv(marca),
-        escapeCsv(modelo),
-        escapeCsv(serie),
-        escapeCsv(codigoEq),
-        escapeCsv(item.solicitante),
-        escapeCsv(item.etapa_actual),
-        escapeCsv(item.monto_estimado != null ? item.monto_estimado : ''),
-        escapeCsv(item.informe_req_folio || ''),
-        escapeCsv(item.fecha_informe_req || ''),
-        escapeCsv(item.solicitud_compra_folio || ''),
-        escapeCsv(item.fecha_solicitud_compra || ''),
-        escapeCsv(item.numero_oc || ''),
-        escapeCsv(item.fecha_oc || ''),
-        escapeCsv(item.fecha_recepcion || ''),
-        escapeCsv(item.notas || ''),
-        escapeCsv(item.created_at ? item.created_at.slice(0, 10) : ''),
-      ].join(',');
-    });
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const fileName = `externalizaciones_compras_${year}-${month}-${day}.csv`;
-
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', fileName);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    exportarACSV(filteredItems, columnas, 'Externalizaciones_Filtradas');
   };
 
   const formatCurrency = (val?: number | null) => {
@@ -550,11 +691,41 @@ export default function ExternalizacionView({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por código EXT, OT, equipo, solicitante, OC..."
-              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-4 text-xs text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-8 text-xs text-slate-900 placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                title="Borrar texto de búsqueda"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Contador de resultados */}
+            <div className="text-xs text-slate-500 whitespace-nowrap mr-1">
+              Mostrando <span className="font-bold text-slate-900">{filteredItems.length}</span> de{' '}
+              <span className="font-bold text-slate-900">{items.length}</span> registros
+            </div>
+
+            {/* Botón Limpiar todos los filtros */}
+            {filtrosActivos > 0 && (
+              <button
+                type="button"
+                id="btn-limpiar-todos-filtros-ext"
+                onClick={handleLimpiarTodosLosFiltros}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 shadow-2xs hover:bg-rose-100 hover:text-rose-800 transition active:scale-95 cursor-pointer"
+                title="Restablecer todos los filtros y búsqueda"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Limpiar filtros ({filtrosActivos})</span>
+              </button>
+            )}
+
             <div className="flex items-center gap-1.5 text-xs text-slate-500">
               <Filter className="h-3.5 w-3.5 text-slate-400" />
               <span>Etapa:</span>
@@ -584,13 +755,18 @@ export default function ExternalizacionView({
 
             <button
               type="button"
+              id="btn-exportar-externalizaciones-csv"
               onClick={handleExportCSV}
               disabled={filteredItems.length === 0}
-              title={filteredItems.length === 0 ? 'No hay adquisiciones para exportar' : 'Exportar a CSV'}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none disabled:active:scale-100"
+              title={
+                filteredItems.length === 0
+                  ? 'No hay registros visibles para exportar'
+                  : `Exportar ${filteredItems.length} adquisición(es) a Excel / CSV`
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none cursor-pointer"
             >
               <Download className="h-4 w-4 text-slate-500" />
-              <span>Exportar a CSV</span>
+              <span>Exportar a Excel / CSV ({filteredItems.length})</span>
             </button>
           </div>
         </div>
@@ -598,16 +774,95 @@ export default function ExternalizacionView({
         {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs text-slate-600">
-            <thead className="border-b border-slate-100 bg-slate-50/80 font-semibold text-slate-700">
-              <tr>
-                <th className="px-4 py-3">Código</th>
-                <th className="px-4 py-3">Origen / OT</th>
-                <th className="px-4 py-3">Tipo Adquisición</th>
-                <th className="px-4 py-3">Equipo / Destino</th>
-                <th className="px-4 py-3">Solicitante</th>
-                <th className="px-4 py-3">Etapa Actual & Progreso</th>
-                <th className="px-4 py-3">Monto / OC Mercado Público</th>
-                <th className="px-4 py-3 text-right">Acciones</th>
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/80">
+                <TableColumnHeader
+                  id="th-ext-codigo"
+                  title="Código"
+                  sortKey="codigo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.codigo}
+                  onFilterChange={(v) => handleColumnFilterChange('codigo', v)}
+                  placeholder="Filtrar código..."
+                  className="min-w-[110px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-origen"
+                  title="Origen / OT"
+                  sortKey="origen"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.origen}
+                  onFilterChange={(v) => handleColumnFilterChange('origen', v)}
+                  selectOptions={uniqueOrigenes}
+                  className="min-w-[140px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-tipo"
+                  title="Tipo Adquisición"
+                  sortKey="tipo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.tipo}
+                  onFilterChange={(v) => handleColumnFilterChange('tipo', v)}
+                  selectOptions={uniqueTiposAdquisicion}
+                  className="min-w-[150px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-equipo"
+                  title="Equipo / Destino"
+                  sortKey="equipo"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.equipo}
+                  onFilterChange={(v) => handleColumnFilterChange('equipo', v)}
+                  placeholder="Filtrar equipo..."
+                  className="min-w-[180px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-solicitante"
+                  title="Solicitante"
+                  sortKey="solicitante"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.solicitante}
+                  onFilterChange={(v) => handleColumnFilterChange('solicitante', v)}
+                  selectOptions={uniqueSolicitantes}
+                  className="min-w-[150px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-etapa"
+                  title="Etapa Actual & Progreso"
+                  sortKey="etapa"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.etapa}
+                  onFilterChange={(v) => handleColumnFilterChange('etapa', v)}
+                  selectOptions={uniqueEtapas}
+                  className="min-w-[180px]"
+                />
+                <TableColumnHeader
+                  id="th-ext-monto-oc"
+                  title="Monto / OC Mercado Público"
+                  sortKey="monto_oc"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="text"
+                  filterValue={colFilters.monto_oc}
+                  onFilterChange={(v) => handleColumnFilterChange('monto_oc', v)}
+                  placeholder="Filtrar OC o monto..."
+                  className="min-w-[160px]"
+                />
+                <th className="px-4 py-3 text-right font-semibold text-slate-700 uppercase tracking-wider text-xs">
+                  Acciones
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

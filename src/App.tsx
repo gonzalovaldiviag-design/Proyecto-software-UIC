@@ -1,4 +1,4 @@
-import { Component, useEffect, useState, type ReactNode } from 'react';
+import { Component, useEffect, useState, useMemo, type ReactNode } from 'react';
 import { AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-react';
 import {
   supabase,
@@ -60,6 +60,30 @@ function AppContent() {
   const [choiceModalOpen, setChoiceModalOpen] = useState(false);
   const [choiceEquipo, setChoiceEquipo] = useState<Equipo | null>(null);
   const [notificacionOTCreada, setNotificacionOTCreada] = useState<{ id: string; codigo: string } | null>(null);
+  const [searchEquipos, setSearchEquipos] = useState('');
+
+  const equiposFiltradosCount = useMemo(() => {
+    if (!searchEquipos.trim()) return equipos.length;
+    const q = searchEquipos.toLowerCase().trim();
+    return equipos.filter((eq) => {
+      return (
+        eq.nombre.toLowerCase().includes(q) ||
+        eq.codigo.toLowerCase().includes(q) ||
+        (eq.serie && eq.serie.toLowerCase().includes(q)) ||
+        (eq.inventario && eq.inventario.toLowerCase().includes(q)) ||
+        (eq.marca && eq.marca.toLowerCase().includes(q)) ||
+        (eq.modelo && eq.modelo.toLowerCase().includes(q)) ||
+        (eq.ubicacion && eq.ubicacion.toLowerCase().includes(q))
+      );
+    }).length;
+  }, [equipos, searchEquipos]);
+
+  const handleSearchChange = (query: string) => {
+    setSearchEquipos(query);
+    if (query.trim() && tab !== 'inventario') {
+      setTab('inventario');
+    }
+  };
 
   useEffect(() => {
     if (!notificacionOTCreada) return;
@@ -272,7 +296,15 @@ function AppContent() {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Dynamic Header with RBAC User Switcher and Roles Navigation */}
-      <Header currentTab={tab} onTabChange={setTab} onAddEquipo={openAdd} />
+      <Header
+        currentTab={tab}
+        onTabChange={setTab}
+        onAddEquipo={openAdd}
+        searchQuery={searchEquipos}
+        onSearchChange={handleSearchChange}
+        equiposFiltradosCount={equiposFiltradosCount}
+        totalEquiposCount={equipos.length}
+      />
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {tab === 'inventario' && (
@@ -287,6 +319,8 @@ function AppContent() {
               onOpenMantenimiento={openMantenimiento}
               onOpenHojaVida={openHojaVida}
               onDelete={handleDeleteEquipo}
+              searchQuery={searchEquipos}
+              onSearchChange={setSearchEquipos}
             />
           </TabErrorBoundary>
         )}

@@ -63,16 +63,27 @@ export interface Mantenimiento {
   created_at: string;
 }
 
+export type TipoNotificacion =
+  | 'ot_asignada'
+  | 'solicitud_externalizacion'
+  | 'externalizacion_aprobada'
+  | 'externalizacion_rechazada'
+  | 'externalizacion_finalizada'
+  | 'info'
+  | 'alerta';
+
 export interface Notificacion {
   id: string;
   destinatario_id?: string | null;
   destinatario_rol?: RolUsuario | null;
+  destinatario_nombre?: string | null;
   titulo: string;
   mensaje: string;
-  tipo: 'info' | 'alerta' | 'solicitud_externalizacion';
+  tipo: TipoNotificacion;
   leida: boolean;
   mantenimiento_id?: string | null;
   codigo_mantenimiento?: string | null;
+  codigo_mantenimiento_ref?: string | null;
   created_at: string;
 }
 
@@ -109,10 +120,14 @@ export interface Externalizacion {
   id: string;
   codigo: string;
   origen: 'mantenimiento' | 'directa';
+  tipo_origen?: string;
   codigo_mantenimiento?: string | null;
+  codigo_mantenimiento_ref?: string | null;
   mantenimiento_id?: string | null;
   tipo: TipoExternalizacion;
+  clasificacion?: string;
   descripcion: string;
+  descripcion_requerimiento?: string;
   equipo_identificacion?: string | null;
   equipo_id?: string | null;
   solicitante: string;
@@ -731,13 +746,57 @@ export const INITIAL_NOTIFICACIONES: Notificacion[] = [
     id: '44444444-4444-4444-8444-444444444401',
     destinatario_rol: 'Ingeniero Supervisor',
     destinatario_id: null,
+    destinatario_nombre: null,
     titulo: 'Solicitud de Externalización - MANT-002',
     mensaje: 'El técnico Téc. Fernando Ruiz solicita externalización para la OT MANT-002 (EQ-006 — Ecógrafo Portátil). Motivo: Se requiere reparación técnica especializada en laboratorio del fabricante para calibración acústica y conector de transductor lineal.',
     tipo: 'solicitud_externalizacion',
     leida: false,
     mantenimiento_id: '22222222-2222-4222-8222-222222222202',
     codigo_mantenimiento: 'MANT-002',
+    codigo_mantenimiento_ref: 'MANT-002',
     created_at: '2026-09-05T14:45:00.000Z',
+  },
+  {
+    id: '44444444-4444-4444-8444-444444444402',
+    destinatario_rol: 'Ingeniero de Servicio / Técnico',
+    destinatario_id: 'user-003-tecnico',
+    destinatario_nombre: 'Téc. Fernando Ruiz',
+    titulo: 'Nueva OT Asignada: MANT-003',
+    mensaje: 'Se te ha asignado la orden para el equipo EQ-001 — Monitor de Signos Vitales del servicio UCI - Sala 3.',
+    tipo: 'ot_asignada',
+    leida: false,
+    mantenimiento_id: '22222222-2222-4222-8222-222222222203',
+    codigo_mantenimiento: 'MANT-003',
+    codigo_mantenimiento_ref: 'MANT-003',
+    created_at: '2026-08-20T09:10:00.000Z',
+  },
+  {
+    id: '44444444-4444-4444-8444-444444444403',
+    destinatario_rol: 'Ingeniero de Servicio / Técnico',
+    destinatario_id: 'user-003-tecnico',
+    destinatario_nombre: 'Téc. Fernando Ruiz',
+    titulo: 'Externalización Autorizada: MANT-001',
+    mensaje: 'El requerimiento de compra/servicio externo fue aprobado e ingresado a Compras.',
+    tipo: 'externalizacion_aprobada',
+    leida: false,
+    mantenimiento_id: '22222222-2222-4222-8222-222222222201',
+    codigo_mantenimiento: 'MANT-001',
+    codigo_mantenimiento_ref: 'MANT-001',
+    created_at: '2026-09-03T11:30:00.000Z',
+  },
+  {
+    id: '44444444-4444-4444-8444-444444444404',
+    destinatario_rol: 'Ingeniero de Servicio / Técnico',
+    destinatario_id: 'user-003-tecnico',
+    destinatario_nombre: 'Téc. Fernando Ruiz',
+    titulo: 'Insumo/Servicio Recibido: MANT-003',
+    mensaje: 'La gestión externa ha concluido (OC recepcionada). Ya puedes proceder con la ejecución y cierre de la OT.',
+    tipo: 'externalizacion_finalizada',
+    leida: false,
+    mantenimiento_id: '22222222-2222-4222-8222-222222222203',
+    codigo_mantenimiento: 'MANT-003',
+    codigo_mantenimiento_ref: 'MANT-003',
+    created_at: '2026-08-21T16:30:00.000Z',
   },
 ];
 

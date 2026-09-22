@@ -12,10 +12,11 @@ import {
   Check,
   Building2,
   Bell,
-  Clock,
+  Search,
+  X,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
-import { supabase, type RolUsuario, type Notificacion } from '@/lib/supabase';
+import { supabase, type RolUsuario } from '@/lib/supabase';
 import NotificationInboxModal from '@/components/NotificationInboxModal';
 
 export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'usuarios';
@@ -25,6 +26,10 @@ interface HeaderProps {
   onTabChange: (tab: AppTab) => void;
   onAddEquipo?: () => void;
   onOpenMantenimientoPorCodigo?: (codigo: string) => void;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+  equiposFiltradosCount?: number;
+  totalEquiposCount?: number;
 }
 
 const ROL_CONFIG: Record<
@@ -72,47 +77,53 @@ export default function Header({
   currentTab,
   onTabChange,
   onOpenMantenimientoPorCodigo,
+  searchQuery,
+  onSearchChange,
+  equiposFiltradosCount,
+  totalEquiposCount,
 }: HeaderProps) {
   const { usuarioActivo, usuarios, cambiarUsuarioActivo, puede } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
-  const [conteoNoLeidas, setConteoNoLeidas] = useState(0);
-  const [conteoPendientesSupervisor, setConteoPendientesSupervisor] = useState(0);
+  const [conteoAlertas, setConteoAlertas] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const esSupervisorOAdmin =
     usuarioActivo.rol === 'Ingeniero Supervisor' ||
-    usuarioActivo.rol === 'Administrador (Jefe de Unidad)';
+    usuarioActivo.rol === 'Administrador (Jefe de Unidad)' ||
+    usuarioActivo.rol?.includes('Administrador');
+
+  const esTecnico = usuarioActivo.rol === 'Ingeniero de Servicio / Técnico';
+  const tieneCampana = esSupervisorOAdmin || esTecnico;
 
   useEffect(() => {
     async function actualizarConteo() {
       try {
-        const { data } = await supabase.from('notificaciones').select('*');
-        if (data) {
-          const list = data as Notificacion[];
-          const pertinentes = list.filter((n) => {
-            if (n.destinatario_id && n.destinatario_id === usuarioActivo.id) return true;
-            if (n.destinatario_rol) {
-              if (esSupervisorOAdmin && n.destinatario_rol === 'Ingeniero Supervisor') return true;
-              if (
-                usuarioActivo.rol === 'Ingeniero de Servicio / Técnico' &&
-                n.destinatario_rol === 'Ingeniero de Servicio / Técnico'
-              ) {
-                return true;
-              }
-            }
-            if (!n.destinatario_rol && !n.destinatario_id) return true;
-            if (usuarioActivo.rol === 'Administrador (Jefe de Unidad)') return true;
-            return false;
-          });
-
-          const unread = pertinentes.filter((n) => !n.leida).length;
-          const pend = pertinentes.filter(
-            (n) => n.tipo === 'solicitud_externalizacion' && !n.leida
-          ).length;
-
-          setConteoNoLeidas(unread);
-          setConteoPendientesSupervisor(pend);
+        if (esSupervisorOAdmin) {
+          const { data: mants } = await supabase.from('mantenimientos').select('*');
+          if (mants) {
+            const list = mants as Mantenimiento[];
+            const pendientes = list.filter(
+              (m) => m.estado_solicitud_externalizacion === 'Pendiente_Aprobacion'
+            );
+            setConteoAlertas(pendientes.length);
+          }
+        } else if (esTecnico) {
+          const { data: notifs } = await supabase.from('notificaciones').select('*');
+          if (notifs) {
+            const list = notifs as Notificacion[];
+            const tecNombre = usuarioActivo.nombre.trim().toLowerCase();
+            const pendientes = list.filter((n) => {
+              if (n.leida) return false;
+              if (n.destinatario_id && n.destinatario_id === usuarioActivo.id) return true;
+              if (n.destinatario_nombre && n.destinatario_nombre.trim().toLowerCase() === tecNombre) return true;
+              if (n.destinatario_rol === 'Ingeniero de Servicio / Técnico' && !n.destinatario_id) return true;
+              return false;
+            });
+            setConteoAlertas(pendientes.length);
+          }
+        } else {
+          setConteoAlertas(0);
         }
       } catch (err) {
         console.warn('Error al actualizar contador de notificaciones:', err);
@@ -120,9 +131,13 @@ export default function Header({
     }
 
     actualizarConteo();
+    window.addEventListener('mantenimientos_updated', actualizarConteo);
     window.addEventListener('notificaciones_updated', actualizarConteo);
-    return () => window.removeEventListener('notificaciones_updated', actualizarConteo);
-  }, [usuarioActivo, esSupervisorOAdmin]);
+    return () => {
+      window.removeEventListener('mantenimientos_updated', actualizarConteo);
+      window.removeEventListener('notificaciones_updated', actualizarConteo);
+    };
+  }, [usuarioActivo.id, usuarioActivo.rol, usuarioActivo.nombre, esSupervisorOAdmin, esTecnico]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -172,45 +187,81 @@ export default function Header({
           </div>
         </div>
 
+        {/* Barra de Búsqueda de Equipos en Tiempo Real (Header - Desktop/Tablet) */}
+        <div className="mx-3 sm:mx-4 flex-1 max-w-xs md:max-w-md lg:max-w-lg hidden sm:block">
+          <div className="relative flex items-center">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              id="header-input-busqueda-equipos"
+              type="text"
+              value={searchQuery ?? ''}
+              onChange={(e) => onSearchChange?.(e.target.value)}
+              placeholder="Buscar por nombre, serie o inventario..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/90 py-2 pl-9 pr-24 text-xs text-slate-900 placeholder:text-slate-400 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            />
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+              {searchQuery && (
+                <>
+                  {equiposFiltradosCount !== undefined && (
+                    <span className="hidden md:inline-flex items-center rounded-full bg-blue-100/90 px-2 py-0.5 text-[10px] font-bold text-blue-800">
+                      {totalEquiposCount !== undefined
+                        ? `${equiposFiltradosCount} de ${totalEquiposCount}`
+                        : `${equiposFiltradosCount} ${equiposFiltradosCount === 1 ? 'equipo' : 'equipos'}`}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onSearchChange?.('')}
+                    className="rounded-md p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+                    title="Limpiar búsqueda"
+                    aria-label="Limpiar búsqueda"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Acciones de Cabecera: Bandeja de Notificaciones y Cambio de Usuario */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Botón de Campana / Bandeja de Notificaciones */}
-          <button
-            id="btn-bandeja-notificaciones-header"
-            type="button"
-            onClick={() => setInboxOpen(true)}
-            className={`relative flex items-center gap-1.5 rounded-xl border p-2 text-xs font-semibold transition active:scale-95 shadow-xs ${
-              conteoPendientesSupervisor > 0
-                ? 'border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 ring-2 ring-amber-400/30'
-                : conteoNoLeidas > 0
-                  ? 'border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 ring-2 ring-blue-400/20'
+          {/* Botón de Campana / Bandeja de Notificaciones para Supervisor, Admin y Técnico */}
+          {tieneCampana && (
+            <button
+              id={esSupervisorOAdmin ? 'btn-campana-notificaciones-supervisor' : 'btn-campana-notificaciones-tecnico'}
+              type="button"
+              onClick={() => setInboxOpen(true)}
+              className={`relative flex items-center gap-1.5 rounded-xl border p-2 text-xs font-semibold transition active:scale-95 shadow-xs ${
+                conteoAlertas > 0
+                  ? 'border-red-300 bg-red-50 text-red-900 hover:bg-red-100 ring-2 ring-red-400/30'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-            title={`Bandeja de Notificaciones: ${conteoNoLeidas} no leídas${
-              conteoPendientesSupervisor > 0
-                ? ` (${conteoPendientesSupervisor} solicitud(es) de externalización pendiente(s))`
-                : ''
-            }`}
-            aria-label="Bandeja de Notificaciones"
-          >
-            <Bell className={`h-4 w-4 ${conteoNoLeidas > 0 ? 'animate-bounce' : ''}`} />
-            <span className="hidden md:inline text-xs">Notificaciones</span>
-            {conteoNoLeidas > 0 && (
-              <span
-                className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.2 text-[10px] font-black text-white shadow-xs ${
-                  conteoPendientesSupervisor > 0 ? 'bg-amber-600' : 'bg-blue-600'
+              }`}
+              title={
+                esSupervisorOAdmin
+                  ? `Bandeja de Aprobaciones: ${conteoAlertas} solicitud(es) de externalización pendiente(s)`
+                  : `Bandeja de Notificaciones: ${conteoAlertas} aviso(s) técnico(s) pendiente(s)`
+              }
+              aria-label="Campana de Notificaciones y Bandeja de Entrada"
+            >
+              <Bell
+                className={`h-4 w-4 ${
+                  conteoAlertas > 0 ? 'text-red-600 animate-bounce' : 'text-slate-600'
                 }`}
-              >
-                {conteoNoLeidas}
+              />
+              <span className="hidden md:inline text-xs font-bold">
+                {esSupervisorOAdmin ? 'Aprobaciones' : 'Avisos'}
               </span>
-            )}
-            {conteoPendientesSupervisor > 0 && (
-              <span className="hidden lg:inline-flex items-center gap-1 rounded bg-amber-200/80 px-1 py-0.5 text-[10px] font-bold text-amber-900">
-                <Clock className="h-2.5 w-2.5" />
-                <span>{conteoPendientesSupervisor} V°B°</span>
-              </span>
-            )}
-          </button>
+              {conteoAlertas > 0 && (
+                <span
+                  id="badge-notificaciones-externalizacion-rojo"
+                  className="inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-black text-white shadow-xs min-w-[18px] text-center"
+                >
+                  {conteoAlertas}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Quick User Switcher */}
           <div className="relative" ref={dropdownRef}>
@@ -348,6 +399,41 @@ export default function Header({
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Barra de Búsqueda de Equipos en Tiempo Real (Header - Mobile) */}
+      <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-2 sm:hidden">
+        <div className="relative flex items-center">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            id="header-input-busqueda-equipos-mobile"
+            type="text"
+            value={searchQuery ?? ''}
+            onChange={(e) => onSearchChange?.(e.target.value)}
+            placeholder="Buscar nombre, serie o inventario..."
+            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-16 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+          />
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            {searchQuery && (
+              <>
+                {equiposFiltradosCount !== undefined && (
+                  <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.2 rounded-full">
+                    {equiposFiltradosCount}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onSearchChange?.('')}
+                  className="rounded p-0.5 text-slate-400 hover:text-slate-700"
+                  title="Limpiar búsqueda"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

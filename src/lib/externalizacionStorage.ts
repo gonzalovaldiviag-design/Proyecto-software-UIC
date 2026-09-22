@@ -285,6 +285,8 @@ export async function guardarExternalizacionParaMantenimiento(params: {
   equipoIdentificacion?: string | null;
   equipoId?: string | null;
   solicitante: string;
+  clasificacion?: string;
+  descripcionRequerimiento?: string;
 }): Promise<Externalizacion | null> {
   const list = await fetchExternalizaciones();
   const existente = list.find(
@@ -298,11 +300,15 @@ export async function guardarExternalizacionParaMantenimiento(params: {
   if (existente) {
     const updates: Partial<Externalizacion> = {
       tipo: params.tipo,
+      clasificacion: params.clasificacion || params.tipo,
+      tipo_origen: 'Mantenimiento',
       descripcion: params.descripcion || existente.descripcion,
+      descripcion_requerimiento: params.descripcionRequerimiento || params.descripcion || existente.descripcion,
       equipo_identificacion: params.equipoIdentificacion || existente.equipo_identificacion,
       equipo_id: params.equipoId || existente.equipo_id,
       solicitante: params.solicitante || existente.solicitante,
       codigo_mantenimiento: params.mantCodigo || existente.codigo_mantenimiento,
+      codigo_mantenimiento_ref: params.mantCodigo || existente.codigo_mantenimiento_ref || existente.codigo_mantenimiento,
       mantenimiento_id: params.mantId || existente.mantenimiento_id,
       updated_at: now,
     };
@@ -333,10 +339,17 @@ export async function guardarExternalizacionParaMantenimiento(params: {
     id: generateUuid(),
     codigo,
     origen: 'mantenimiento',
+    tipo_origen: 'Mantenimiento',
     codigo_mantenimiento: params.mantCodigo || null,
+    codigo_mantenimiento_ref: params.mantCodigo || null,
     mantenimiento_id: params.mantId || null,
     tipo: params.tipo,
+    clasificacion: params.clasificacion || params.tipo,
     descripcion:
+      params.descripcion ||
+      `Requerimiento de compra externa derivado de OT ${params.mantCodigo || 'Mantenimiento'}.`,
+    descripcion_requerimiento:
+      params.descripcionRequerimiento ||
       params.descripcion ||
       `Requerimiento de compra externa derivado de OT ${params.mantCodigo || 'Mantenimiento'}.`,
     equipo_identificacion: params.equipoIdentificacion || null,
@@ -533,6 +546,56 @@ export async function actualizarEtapaExternalizacion(
 
     const localList = getStoredExternalizaciones();
     setStoredExternalizaciones(localList.map((e) => (e.id === id ? updatedObj : e)));
+
+    // Emitir notificación al técnico si la compra vinculada a una OT pasa a 'Finalizada / Recibida'
+    if (nuevaEtapa === 'Finalizada / Recibida' && actual.etapa_actual !== 'Finalizada / Recibida') {
+      try {
+        const mantCod = actual.codigo_mantenimiento || actual.codigo_mantenimiento_ref || '';
+        const mantId = actual.mantenimiento_id;
+        let tecnicoAsignado: string | null = null;
+        let tecnicoId: string | null = null;
+
+        if (mantId || mantCod) {
+          const { data: mData } = await supabase
+            .from('mantenimientos')
+            .select('*')
+            .eq(mantId ? 'id' : 'codigo', mantId || mantCod)
+            .single();
+          if (mData) {
+            tecnicoAsignado = mData.asignado_a || mData.externalizacion_solicitada_por || null;
+          }
+        }
+
+        if (tecnicoAsignado) {
+          const { data: uData } = await supabase.from('perfiles').select('*');
+          if (uData && Array.isArray(uData)) {
+            const u = uData.find(
+              (usr) => usr.nombre?.toLowerCase() === tecnicoAsignado?.toLowerCase()
+            );
+            if (u) tecnicoId = u.id;
+          }
+        }
+
+        await supabase.from('notificaciones').insert({
+          destinatario_rol: 'Ingeniero de Servicio / Técnico',
+          destinatario_id: tecnicoId,
+          destinatario_nombre: tecnicoAsignado,
+          titulo: `Insumo/Servicio Recibido: ${mantCod || 'OT'}`,
+          mensaje:
+            'La gestión externa ha concluido (OC recepcionada). Ya puedes proceder con la ejecución y cierre de la OT.',
+          tipo: 'externalizacion_finalizada',
+          leida: false,
+          mantenimiento_id: mantId || null,
+          codigo_mantenimiento: mantCod || null,
+          codigo_mantenimiento_ref: mantCod || null,
+        });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('notificaciones_updated'));
+        }
+      } catch (notifErr) {
+        console.warn('Error emitiendo notificación de externalización finalizada:', notifErr);
+      }
+    }
 
     return {
       success: true,
