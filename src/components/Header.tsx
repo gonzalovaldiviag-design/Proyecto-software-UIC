@@ -14,9 +14,19 @@ import {
   Bell,
   Search,
   X,
+  Sparkles,
+  RotateCcw,
+  LogOut,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
-import { supabase, type RolUsuario } from '@/lib/supabase';
+import { ROLES_SIMULABLES } from '@/lib/authRoles';
+import {
+  supabase,
+  type RolUsuario,
+  type Mantenimiento,
+  type Notificacion,
+  INITIAL_PERFILES,
+} from '@/lib/supabase';
 import NotificationInboxModal from '@/components/NotificationInboxModal';
 
 export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'usuarios';
@@ -82,18 +92,36 @@ export default function Header({
   equiposFiltradosCount,
   totalEquiposCount,
 }: HeaderProps) {
-  const { usuarioActivo, usuarios, cambiarUsuarioActivo, puede } = useAuth();
+  const {
+    usuarioActivo,
+    usuarioAutenticado,
+    rolSimulado,
+    esModoSimulacion,
+    esAdminReal,
+    iniciarSimulacion,
+    detenerSimulacion,
+    logout,
+    usuarios,
+    cambiarUsuarioActivo,
+    puede,
+  } = useAuth();
+
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [simulacionOpen, setSimulacionOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [conteoAlertas, setConteoAlertas] = useState(0);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const simulacionRef = useRef<HTMLDivElement>(null);
+
+  const user = usuarioActivo || INITIAL_PERFILES[0];
 
   const esSupervisorOAdmin =
-    usuarioActivo.rol === 'Ingeniero Supervisor' ||
-    usuarioActivo.rol === 'Administrador (Jefe de Unidad)' ||
-    usuarioActivo.rol?.includes('Administrador');
+    user.rol === 'Ingeniero Supervisor' ||
+    user.rol === 'Administrador (Jefe de Unidad)' ||
+    user.rol?.includes('Administrador');
 
-  const esTecnico = usuarioActivo.rol === 'Ingeniero de Servicio / Técnico';
+  const esTecnico = user.rol === 'Ingeniero de Servicio / Técnico';
   const tieneCampana = esSupervisorOAdmin || esTecnico;
 
   useEffect(() => {
@@ -112,10 +140,10 @@ export default function Header({
           const { data: notifs } = await supabase.from('notificaciones').select('*');
           if (notifs) {
             const list = notifs as Notificacion[];
-            const tecNombre = usuarioActivo.nombre.trim().toLowerCase();
+            const tecNombre = user.nombre.trim().toLowerCase();
             const pendientes = list.filter((n) => {
               if (n.leida) return false;
-              if (n.destinatario_id && n.destinatario_id === usuarioActivo.id) return true;
+              if (n.destinatario_id && n.destinatario_id === user.id) return true;
               if (n.destinatario_nombre && n.destinatario_nombre.trim().toLowerCase() === tecNombre) return true;
               if (n.destinatario_rol === 'Ingeniero de Servicio / Técnico' && !n.destinatario_id) return true;
               return false;
@@ -137,19 +165,22 @@ export default function Header({
       window.removeEventListener('mantenimientos_updated', actualizarConteo);
       window.removeEventListener('notificaciones_updated', actualizarConteo);
     };
-  }, [usuarioActivo.id, usuarioActivo.rol, usuarioActivo.nombre, esSupervisorOAdmin, esTecnico]);
+  }, [user.id, user.rol, user.nombre, esSupervisorOAdmin, esTecnico]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setDropdownOpen(false);
       }
+      if (simulacionRef.current && !simulacionRef.current.contains(event.target as Node)) {
+        setSimulacionOpen(false);
+      }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const config = ROL_CONFIG[usuarioActivo.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
+  const config = ROL_CONFIG[user.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
 
   function handleAbrirOTDesdeNotificacion(codigoOT: string) {
     if (onOpenMantenimientoPorCodigo) {
@@ -166,6 +197,43 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-md print:hidden shadow-xs">
+      {/* Cintillo de Estado Flotante (Banner de Simulación para Administrador) */}
+      {esModoSimulacion && rolSimulado && (
+        <aside
+          id="cintillo-modo-simulacion"
+          aria-label="Cintillo de Modo Simulación"
+          className="bg-purple-700 text-white border-b border-purple-800 shadow-md animate-in slide-in-from-top-1 duration-200"
+        >
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6 lg:px-8 text-xs font-semibold">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-purple-900/70 text-amber-300 ring-1 ring-purple-400/30 animate-pulse">
+                <Sparkles className="h-3.5 w-3.5" />
+              </span>
+              <span>
+                Modo Simulación Activo: Visualizando sistema como{' '}
+                <strong className="underline decoration-amber-400 decoration-2 text-amber-200 font-bold">
+                  {rolSimulado}
+                </strong>
+              </span>
+              <span className="hidden md:inline-block rounded-md bg-purple-900/60 px-2 py-0.5 text-[10px] text-purple-200 font-normal">
+                Sesión Real: {usuarioAutenticado?.nombre || 'Administrador'}
+              </span>
+            </div>
+
+            <button
+              id="btn-volver-modo-administrador"
+              type="button"
+              onClick={detenerSimulacion}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs font-bold text-purple-900 shadow-sm transition hover:bg-purple-50 active:scale-95 cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-purple-700" />
+              <span>Volver a Modo Administrador</span>
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* Main Header Container */}
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
         {/* Logo and Brand */}
         <div className="flex items-center gap-3">
@@ -224,15 +292,112 @@ export default function Header({
           </div>
         </div>
 
-        {/* Acciones de Cabecera: Bandeja de Notificaciones y Cambio de Usuario */}
+        {/* Acciones de Cabecera: Simulación de Rol, Notificaciones, Cambio de Usuario y Salir */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Selector de Simulación de Rol (Acceso Exclusivo para Administrador Real) */}
+          {esAdminReal && (
+            <div className="relative" ref={simulacionRef}>
+              <button
+                id="btn-selector-simular-rol"
+                type="button"
+                onClick={() => setSimulacionOpen(!simulacionOpen)}
+                className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
+                  esModoSimulacion
+                    ? 'border-purple-400 bg-purple-100 text-purple-900 ring-2 ring-purple-500/30'
+                    : 'border-purple-200/80 bg-purple-50/50 text-purple-700 hover:bg-purple-100/70 hover:border-purple-300'
+                }`}
+                title="Módulo de Simulación de Perfiles para Administrador"
+              >
+                <Sparkles className={`h-4 w-4 ${esModoSimulacion ? 'text-purple-700' : 'text-purple-600'}`} />
+                <span className="hidden sm:inline">Simular Rol</span>
+                <span className="sm:hidden">Simular</span>
+                {esModoSimulacion && (
+                  <span className="rounded-full bg-purple-700 px-1.5 py-0.2 text-[9px] font-extrabold text-white">
+                    ON
+                  </span>
+                )}
+                <ChevronDown className={`h-3.5 w-3.5 text-purple-500 transition-transform ${simulacionOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Menú Desplegable con las 4 Opciones de Simulación */}
+              {simulacionOpen && (
+                <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl ring-1 ring-slate-900/10 z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-3 py-2 border-b border-slate-100 bg-purple-50/70 rounded-xl mb-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-purple-950 uppercase tracking-wider">
+                        Simular Rol
+                      </span>
+                      <span className="text-[10px] bg-purple-200 text-purple-900 font-extrabold px-1.5 py-0.5 rounded">
+                        Admin
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-purple-900/80 mt-0.5">
+                      Visualiza la interfaz y evalúa permisos RBAC con la perspectiva del perfil seleccionado.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    {ROLES_SIMULABLES.map((item) => {
+                      const isSelected = rolSimulado === item.rol;
+                      return (
+                        <button
+                          key={item.rol}
+                          type="button"
+                          onClick={() => {
+                            iniciarSimulacion(item.rol);
+                            setSimulacionOpen(false);
+                          }}
+                          className={`w-full flex items-start gap-2.5 rounded-xl p-2.5 text-left transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-purple-100/90 border border-purple-300 text-purple-950 shadow-xs'
+                              : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-800">
+                                {item.label}
+                              </span>
+                              {isSelected && (
+                                <Check className="h-4 w-4 text-purple-700 flex-shrink-0" />
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                              {item.descripcion}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {esModoSimulacion && (
+                    <div className="mt-2 pt-2 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          detenerSimulacion();
+                          setSimulacionOpen(false);
+                        }}
+                        className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-purple-50 hover:bg-purple-100 py-1.5 text-xs font-bold text-purple-900 transition cursor-pointer"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 text-purple-700" />
+                        <span>Volver a Modo Administrador</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Botón de Campana / Bandeja de Notificaciones para Supervisor, Admin y Técnico */}
           {tieneCampana && (
             <button
               id={esSupervisorOAdmin ? 'btn-campana-notificaciones-supervisor' : 'btn-campana-notificaciones-tecnico'}
               type="button"
               onClick={() => setInboxOpen(true)}
-              className={`relative flex items-center gap-1.5 rounded-xl border p-2 text-xs font-semibold transition active:scale-95 shadow-xs ${
+              className={`relative flex items-center gap-1.5 rounded-xl border p-2 text-xs font-semibold transition active:scale-95 shadow-xs cursor-pointer ${
                 conteoAlertas > 0
                   ? 'border-red-300 bg-red-50 text-red-900 hover:bg-red-100 ring-2 ring-red-400/30'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -263,142 +428,179 @@ export default function Header({
             </button>
           )}
 
-          {/* Quick User Switcher */}
+          {/* Quick User Switcher & Profile Details */}
           <div className="relative" ref={dropdownRef}>
-          <button
-            type="button"
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="group flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-1.5 pr-3 shadow-xs hover:border-slate-300 hover:bg-slate-50 transition active:scale-[0.98]"
-            title="Cambiar usuario activo (Simulación de Roles RBAC)"
-          >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 font-semibold text-xs text-slate-700 ring-1 ring-slate-200">
-              {usuarioActivo.nombre
-                .split(' ')
-                .map((n) => n[0])
-                .slice(0, 2)
-                .join('')}
-            </div>
-            <div className="text-left hidden sm:block">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-slate-800 leading-tight max-w-[140px] truncate">
-                  {usuarioActivo.nombre}
-                </span>
+            <button
+              type="button"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="group flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-1.5 pr-3 shadow-xs hover:border-slate-300 hover:bg-slate-50 transition active:scale-[0.98] cursor-pointer"
+              title="Perfil activo y cambio de usuario"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 font-semibold text-xs text-slate-700 ring-1 ring-slate-200">
+                {user.nombre
+                  .split(' ')
+                  .map((n) => n[0])
+                  .slice(0, 2)
+                  .join('')}
               </div>
-              <div className="flex items-center gap-1">
-                <span
-                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${config.badgeClass}`}
-                >
-                  {config.icon}
-                  <span>{config.shortLabel}</span>
-                </span>
-                {usuarioActivo.servicio_clinico_asignado && (
-                  <span className="inline-flex items-center rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 border border-emerald-200/60 max-w-[100px] truncate">
-                    {usuarioActivo.servicio_clinico_asignado}
+              <div className="text-left hidden sm:block">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-800 leading-tight max-w-[140px] truncate">
+                    {user.nombre}
                   </span>
-                )}
-              </div>
-            </div>
-            <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
-          </button>
-
-          {/* Dropdown Menu */}
-          {dropdownOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl ring-1 ring-slate-900/10 animate-in fade-in zoom-in-95 duration-150 z-50">
-              <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/80 rounded-xl mb-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Cambio Rápido de Perfil (RBAC)
-                  </span>
-                  <span className="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-semibold border border-blue-200/60">
-                    5 Roles UEM
-                  </span>
+                  {esModoSimulacion && (
+                    <span className="rounded bg-purple-100 text-purple-800 text-[9px] font-bold px-1">
+                      SIM
+                    </span>
+                  )}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Selecciona un usuario institucional para probar visualmente sus restricciones y permisos.
-                </p>
+                <div className="flex items-center gap-1">
+                  <span
+                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${config.badgeClass}`}
+                  >
+                    {config.icon}
+                    <span>{config.shortLabel}</span>
+                  </span>
+                  {user.servicio_clinico_asignado && (
+                    <span className="inline-flex items-center rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 border border-emerald-200/60 max-w-[100px] truncate">
+                      {user.servicio_clinico_asignado}
+                    </span>
+                  )}
+                </div>
               </div>
+              <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
 
-              <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
-                {usuarios.map((u) => {
-                  const isSelected = u.id === usuarioActivo.id;
-                  const uConfig = ROL_CONFIG[u.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
+            {/* Dropdown Menu */}
+            {dropdownOpen && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl ring-1 ring-slate-900/10 animate-in fade-in zoom-in-95 duration-150 z-50">
+                <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/80 rounded-xl mb-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Perfil Activo & Cuentas (RBAC)
+                    </span>
+                    <span className="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-semibold border border-blue-200/60">
+                      5 Roles UEM
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Selecciona una cuenta institucional para cambiar de usuario o prueba sus permisos.
+                  </p>
+                </div>
 
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      onClick={() => {
-                        cambiarUsuarioActivo(u.id);
-                        setDropdownOpen(false);
-                      }}
-                      className={`w-full flex items-start gap-3 rounded-xl p-2.5 text-left transition-all ${
-                        isSelected
-                          ? 'bg-blue-50/80 border border-blue-200 text-blue-950 shadow-xs'
-                          : 'hover:bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      <div
-                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold ring-1 ${
+                <div className="space-y-1 max-h-[300px] overflow-y-auto pr-1">
+                  {usuarios.map((u) => {
+                    const isSelected = u.id === user.id;
+                    const uConfig = ROL_CONFIG[u.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
+
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => {
+                          cambiarUsuarioActivo(u.id);
+                          setDropdownOpen(false);
+                        }}
+                        className={`w-full flex items-start gap-3 rounded-xl p-2.5 text-left transition-all cursor-pointer ${
                           isSelected
-                            ? 'bg-blue-600 text-white ring-blue-600'
-                            : 'bg-slate-100 text-slate-700 ring-slate-200'
+                            ? 'bg-blue-50/80 border border-blue-200 text-blue-950 shadow-xs'
+                            : 'hover:bg-slate-50 text-slate-700'
                         }`}
                       >
-                        {u.nombre
-                          .split(' ')
-                          .map((n) => n[0])
-                          .slice(0, 2)
-                          .join('')}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="text-xs font-bold truncate">{u.nombre}</span>
-                          {isSelected && <Check className="h-4 w-4 text-blue-600 flex-shrink-0" />}
+                        <div
+                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold ring-1 ${
+                            isSelected
+                              ? 'bg-blue-600 text-white ring-blue-600'
+                              : 'bg-slate-100 text-slate-700 ring-slate-200'
+                          }`}
+                        >
+                          {u.nombre
+                            .split(' ')
+                            .map((n) => n[0])
+                            .slice(0, 2)
+                            .join('')}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                          <span
-                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${uConfig.badgeClass}`}
-                          >
-                            {uConfig.icon}
-                            <span>{u.rol}</span>
-                          </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-xs font-bold truncate">{u.nombre}</span>
+                            {isSelected && <Check className="h-4 w-4 text-blue-600 flex-shrink-0" />}
+                          </div>
 
-                          {u.servicio_clinico_asignado && (
-                            <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
-                              <Building2 className="h-2.5 w-2.5" />
-                              <span>{u.servicio_clinico_asignado}</span>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span
+                              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${uConfig.badgeClass}`}
+                            >
+                              {uConfig.icon}
+                              <span>{u.rol}</span>
                             </span>
-                          )}
+
+                            {u.servicio_clinico_asignado && (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
+                                <Building2 className="h-2.5 w-2.5" />
+                                <span>{u.servicio_clinico_asignado}</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+                            {uConfig.descripcion}
+                          </p>
                         </div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                        <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                          {uConfig.descripcion}
-                        </p>
-                      </div>
+                {puede('gestionar_usuarios') && (
+                  <div className="mt-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onTabChange('usuarios');
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 py-1.5 text-xs font-semibold text-slate-700 transition cursor-pointer"
+                    >
+                      <Users className="h-3.5 w-3.5 text-slate-600" />
+                      <span>Administrar Todos los Usuarios & Permisos</span>
                     </button>
-                  );
-                })}
-              </div>
+                  </div>
+                )}
 
-              {puede('gestionar_usuarios') && (
+                {/* Botón de Cerrar Sesión en Header */}
                 <div className="mt-2 pt-2 border-t border-slate-100">
                   <button
+                    id="btn-header-cerrar-sesion"
                     type="button"
-                    onClick={() => {
-                      onTabChange('usuarios');
+                    onClick={async () => {
                       setDropdownOpen(false);
+                      await logout();
                     }}
-                    className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 py-1.5 text-xs font-semibold text-slate-700 transition"
+                    className="w-full flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 py-2 text-xs font-bold text-red-700 transition cursor-pointer active:scale-95"
                   >
-                    <Users className="h-3.5 w-3.5 text-slate-600" />
-                    <span>Administrar Todos los Usuarios & Permisos</span>
+                    <LogOut className="h-3.5 w-3.5 text-red-600" />
+                    <span>Cerrar Sesión</span>
                   </button>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
+
+          {/* Botón Rápido de Cerrar Sesión en Cabecera */}
+          <button
+            id="btn-header-quick-logout"
+            type="button"
+            onClick={async () => {
+              await logout();
+            }}
+            className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition shadow-xs cursor-pointer active:scale-95"
+            title="Cerrar sesión y volver a la pantalla de Login"
+            aria-label="Cerrar sesión"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="hidden lg:inline text-xs font-bold">Salir</span>
+          </button>
         </div>
       </div>
 
@@ -436,36 +638,35 @@ export default function Header({
           </div>
         </div>
       </div>
-    </div>
 
-      {/* Role Notice Banner */}
-      {usuarioActivo.rol === 'Clínico / Solicitante' && (
+      {/* Role Notice Banners (para perfiles específicos sin simulación o con simulación activa) */}
+      {user.rol === 'Clínico / Solicitante' && (
         <div className="bg-emerald-50 border-y border-emerald-200/80 px-4 py-1.5 text-xs text-emerald-800 flex items-center justify-between">
           <div className="flex items-center gap-2 mx-auto max-w-7xl w-full">
             <Building2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
             <span>
               <strong>Modo Clínico Activo:</strong> Filtrando automáticamente el catastro y requerimientos para tu servicio asignado:{' '}
               <strong className="underline decoration-emerald-500 decoration-2">
-                {usuarioActivo.servicio_clinico_asignado || 'Servicio no asignado'}
+                {user.servicio_clinico_asignado || 'UCI - Sala 3'}
               </strong>
             </span>
           </div>
         </div>
       )}
 
-      {usuarioActivo.rol === 'Ingeniero de Servicio / Técnico' && (
+      {user.rol === 'Ingeniero de Servicio / Técnico' && (
         <div className="bg-amber-50 border-y border-amber-200/80 px-4 py-1.5 text-xs text-amber-800 flex items-center justify-between">
           <div className="flex items-center gap-2 mx-auto max-w-7xl w-full">
             <Wrench className="h-4 w-4 text-amber-600 flex-shrink-0" />
             <span>
               <strong>Modo Técnico Activo:</strong> Visualizando por defecto únicamente las órdenes de trabajo asignadas a{' '}
-              <strong>{usuarioActivo.nombre}</strong>.
+              <strong>{user.nombre}</strong>.
             </span>
           </div>
         </div>
       )}
 
-      {usuarioActivo.rol === 'Auditor / Directivo' && (
+      {user.rol === 'Auditor / Directivo' && (
         <div className="bg-slate-100 border-y border-slate-300 px-4 py-1.5 text-xs text-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2 mx-auto max-w-7xl w-full">
             <Eye className="h-4 w-4 text-slate-600 flex-shrink-0" />
@@ -481,7 +682,7 @@ export default function Header({
         <nav className="flex gap-1 overflow-x-auto scrollbar-none">
           <button
             onClick={() => onTabChange('inventario')}
-            className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
               currentTab === 'inventario'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -493,7 +694,7 @@ export default function Header({
 
           <button
             onClick={() => onTabChange('mantenimiento')}
-            className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
               currentTab === 'mantenimiento'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -507,7 +708,7 @@ export default function Header({
           {puede('ver_externalizacion') && (
             <button
               onClick={() => onTabChange('externalizacion')}
-              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 currentTab === 'externalizacion'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-slate-500 hover:text-slate-700'
@@ -522,7 +723,7 @@ export default function Header({
           {puede('gestionar_usuarios') && (
             <button
               onClick={() => onTabChange('usuarios')}
-              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 currentTab === 'usuarios'
                   ? 'border-purple-600 text-purple-600'
                   : 'border-transparent text-slate-500 hover:text-slate-700'

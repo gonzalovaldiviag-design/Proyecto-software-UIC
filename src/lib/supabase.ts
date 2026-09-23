@@ -1149,6 +1149,43 @@ function createMockClient() {
         };
       },
     },
+
+    auth: {
+      async signInWithPassword({ email, password }: { email?: string; password?: string }) {
+        const list = getStored<PerfilUsuario[]>('perfiles', perfiles);
+        const match = list.find((p) => p.email.toLowerCase() === (email || '').toLowerCase().trim());
+        if (!match) {
+          return { data: { user: null, session: null }, error: new Error('Usuario no encontrado en el sistema.') };
+        }
+        if (match.activo === false) {
+          return { data: { user: null, session: null }, error: new Error('Cuenta inactiva o deshabilitada.') };
+        }
+        if (match.password && match.password !== password) {
+          return { data: { user: null, session: null }, error: new Error('Credenciales inválidas.') };
+        }
+        const user = { id: match.id, email: match.email, user_metadata: { nombre: match.nombre, rol: match.rol } };
+        const session = { user, access_token: 'mock-session-token' };
+        return { data: { user, session }, error: null };
+      },
+      async signOut() {
+        return { error: null };
+      },
+      async getSession() {
+        return { data: { session: null }, error: null };
+      },
+      async getUser() {
+        return { data: { user: null }, error: null };
+      },
+      onAuthStateChange() {
+        return {
+          data: {
+            subscription: {
+              unsubscribe() {},
+            },
+          },
+        };
+      },
+    },
   };
 }
 

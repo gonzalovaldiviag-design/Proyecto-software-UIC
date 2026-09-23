@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, useMemo, type ReactNode } from 'react';
-import { AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ExternalLink, X, Loader2 } from 'lucide-react';
 import {
   supabase,
   type Equipo,
@@ -10,6 +10,7 @@ import {
 import { saveMantenimientoRecord } from '@/lib/mantenimientoStorage';
 import { AuthProvider, useAuth } from '@/lib/authContext';
 import Header from '@/components/Header';
+import LoginView from '@/components/LoginView';
 import EquiposView from '@/components/EquiposView';
 import MantenimientosView from '@/components/MantenimientosView';
 import ExternalizacionView from '@/components/ExternalizacionView';
@@ -45,7 +46,7 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { message: str
 }
 
 function AppContent() {
-  const { puede } = useAuth();
+  const { puede, estaAutenticado, loading: authLoading } = useAuth();
   const [tab, setTab] = useState<Tab>('inventario');
 
   const [equipos, setEquipos] = useState<Equipo[]>([]);
@@ -109,8 +110,10 @@ function AppContent() {
   }
 
   useEffect(() => {
-    fetchEquipos();
-  }, []);
+    if (estaAutenticado) {
+      fetchEquipos();
+    }
+  }, [estaAutenticado]);
 
   function nextCodigo(): string {
     let max = 0;
@@ -291,6 +294,21 @@ function AppContent() {
       return;
     }
     await fetchEquipos();
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-slate-400">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+          <p className="text-xs uppercase tracking-wider font-semibold">Cargando sistema UEM 1.3...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!estaAutenticado) {
+    return <LoginView />;
   }
 
   return (
