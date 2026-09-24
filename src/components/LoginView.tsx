@@ -121,10 +121,10 @@ export default function LoginView() {
             <Boxes className="h-7 w-7" />
           </div>
           <h2 className="mt-4 text-2xl font-extrabold tracking-tight text-white sm:text-3xl">
-            UEM 1.3
+            UIC CORE
           </h2>
           <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-blue-400">
-            Hospital Clínico — Unidad de Equipos Médicos
+            Hospital Dr. Gustavo Fricke de Viña del Mar
           </p>
           <p className="mt-1 text-xs text-slate-400">
             Ingreso Seguro al Sistema de Gestión Biomédica & Mantenimiento

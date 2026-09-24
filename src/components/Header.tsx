@@ -101,17 +101,13 @@ export default function Header({
     iniciarSimulacion,
     detenerSimulacion,
     logout,
-    usuarios,
-    cambiarUsuarioActivo,
     puede,
   } = useAuth();
 
-  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [simulacionOpen, setSimulacionOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [conteoAlertas, setConteoAlertas] = useState(0);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
   const simulacionRef = useRef<HTMLDivElement>(null);
 
   const user = usuarioActivo || INITIAL_PERFILES[0];
@@ -169,9 +165,6 @@ export default function Header({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setDropdownOpen(false);
-      }
       if (simulacionRef.current && !simulacionRef.current.contains(event.target as Node)) {
         setSimulacionOpen(false);
       }
@@ -428,178 +421,59 @@ export default function Header({
             </button>
           )}
 
-          {/* Quick User Switcher & Profile Details */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="group flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-1.5 pr-3 shadow-xs hover:border-slate-300 hover:bg-slate-50 transition active:scale-[0.98] cursor-pointer"
-              title="Perfil activo y cambio de usuario"
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 font-semibold text-xs text-slate-700 ring-1 ring-slate-200">
-                {user.nombre
-                  .split(' ')
-                  .map((n) => n[0])
-                  .slice(0, 2)
-                  .join('')}
-              </div>
-              <div className="text-left hidden sm:block">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-slate-800 leading-tight max-w-[140px] truncate">
-                    {user.nombre}
+          {/* Perfil del Usuario Activo (Informativo, sin selector) */}
+          <div
+            id="header-user-profile-badge"
+            className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-1.5 pr-3 shadow-xs"
+            title={`Sesión activa: ${user.nombre} (${user.rol})`}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 font-semibold text-xs text-slate-700 ring-1 ring-slate-200 flex-shrink-0">
+              {user.nombre
+                .split(' ')
+                .map((n) => n[0])
+                .slice(0, 2)
+                .join('')}
+            </div>
+            <div className="text-left hidden sm:block">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold text-slate-800 leading-tight max-w-[140px] truncate">
+                  {user.nombre}
+                </span>
+                {esModoSimulacion && (
+                  <span className="rounded bg-purple-100 text-purple-800 text-[9px] font-bold px-1 ring-1 ring-purple-400/30">
+                    SIM
                   </span>
-                  {esModoSimulacion && (
-                    <span className="rounded bg-purple-100 text-purple-800 text-[9px] font-bold px-1">
-                      SIM
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <span
-                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${config.badgeClass}`}
-                  >
-                    {config.icon}
-                    <span>{config.shortLabel}</span>
-                  </span>
-                  {user.servicio_clinico_asignado && (
-                    <span className="inline-flex items-center rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 border border-emerald-200/60 max-w-[100px] truncate">
-                      {user.servicio_clinico_asignado}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {/* Dropdown Menu */}
-            {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl ring-1 ring-slate-900/10 animate-in fade-in zoom-in-95 duration-150 z-50">
-                <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/80 rounded-xl mb-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Perfil Activo & Cuentas (RBAC)
-                    </span>
-                    <span className="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-semibold border border-blue-200/60">
-                      5 Roles UEM
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Selecciona una cuenta institucional para cambiar de usuario o prueba sus permisos.
-                  </p>
-                </div>
-
-                <div className="space-y-1 max-h-[300px] overflow-y-auto pr-1">
-                  {usuarios.map((u) => {
-                    const isSelected = u.id === user.id;
-                    const uConfig = ROL_CONFIG[u.rol] || ROL_CONFIG['Administrador (Jefe de Unidad)'];
-
-                    return (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => {
-                          cambiarUsuarioActivo(u.id);
-                          setDropdownOpen(false);
-                        }}
-                        className={`w-full flex items-start gap-3 rounded-xl p-2.5 text-left transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-blue-50/80 border border-blue-200 text-blue-950 shadow-xs'
-                            : 'hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <div
-                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-xs font-bold ring-1 ${
-                            isSelected
-                              ? 'bg-blue-600 text-white ring-blue-600'
-                              : 'bg-slate-100 text-slate-700 ring-slate-200'
-                          }`}
-                        >
-                          {u.nombre
-                            .split(' ')
-                            .map((n) => n[0])
-                            .slice(0, 2)
-                            .join('')}
-                        </div>
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs font-bold truncate">{u.nombre}</span>
-                            {isSelected && <Check className="h-4 w-4 text-blue-600 flex-shrink-0" />}
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                            <span
-                              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${uConfig.badgeClass}`}
-                            >
-                              {uConfig.icon}
-                              <span>{u.rol}</span>
-                            </span>
-
-                            {u.servicio_clinico_asignado && (
-                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
-                                <Building2 className="h-2.5 w-2.5" />
-                                <span>{u.servicio_clinico_asignado}</span>
-                              </span>
-                            )}
-                          </div>
-
-                          <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                            {uConfig.descripcion}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {puede('gestionar_usuarios') && (
-                  <div className="mt-2 pt-2 border-t border-slate-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onTabChange('usuarios');
-                        setDropdownOpen(false);
-                      }}
-                      className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 py-1.5 text-xs font-semibold text-slate-700 transition cursor-pointer"
-                    >
-                      <Users className="h-3.5 w-3.5 text-slate-600" />
-                      <span>Administrar Todos los Usuarios & Permisos</span>
-                    </button>
-                  </div>
                 )}
-
-                {/* Botón de Cerrar Sesión en Header */}
-                <div className="mt-2 pt-2 border-t border-slate-100">
-                  <button
-                    id="btn-header-cerrar-sesion"
-                    type="button"
-                    onClick={async () => {
-                      setDropdownOpen(false);
-                      await logout();
-                    }}
-                    className="w-full flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 py-2 text-xs font-bold text-red-700 transition cursor-pointer active:scale-95"
-                  >
-                    <LogOut className="h-3.5 w-3.5 text-red-600" />
-                    <span>Cerrar Sesión</span>
-                  </button>
-                </div>
               </div>
-            )}
+              <div className="flex items-center gap-1">
+                <span
+                  className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${config.badgeClass}`}
+                >
+                  {config.icon}
+                  <span>{config.shortLabel}</span>
+                </span>
+                {user.servicio_clinico_asignado && (
+                  <span className="inline-flex items-center rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 border border-emerald-200/60 max-w-[100px] truncate">
+                    {user.servicio_clinico_asignado}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Botón Rápido de Cerrar Sesión en Cabecera */}
+          {/* Botón de Cerrar Sesión */}
           <button
-            id="btn-header-quick-logout"
+            id="btn-header-cerrar-sesion"
             type="button"
             onClick={async () => {
               await logout();
             }}
-            className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition shadow-xs cursor-pointer active:scale-95"
-            title="Cerrar sesión y volver a la pantalla de Login"
+            className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition shadow-xs cursor-pointer active:scale-95"
+            title="Cerrar sesión institucional y volver a la pantalla de Login"
             aria-label="Cerrar sesión"
           >
-            <LogOut className="h-4 w-4" />
-            <span className="hidden lg:inline text-xs font-bold">Salir</span>
+            <LogOut className="h-4 w-4 text-slate-500" />
+            <span className="hidden sm:inline text-xs font-bold">Cerrar Sesión</span>
           </button>
         </div>
       </div>
