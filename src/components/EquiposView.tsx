@@ -18,6 +18,11 @@ import {
   X,
   SlidersHorizontal,
   RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  RefreshCw,
 } from 'lucide-react';
 import {
   type Equipo,
@@ -53,16 +58,19 @@ const CAMPOS_BUSQUEDA_EQUIPO: { id: CampoBusquedaEquipo; label: string; placehol
   { id: 'inventario', label: 'N° Inventario', placeholder: 'Buscar por folio o número de inventario...' },
 ];
 
-interface EquiposViewProps {
-  equipos: Equipo[];
-  loading: boolean;
-  error: string | null;
-  onClearError: () => void;
+export interface EquiposViewProps {
+  equipos?: Equipo[];
+  loading?: boolean;
+  error?: string | null;
+  onClearError?: () => void;
   onOpenAdd: () => void;
   onOpenEdit: (eq: Equipo) => void;
   onOpenMantenimiento: (eq: Equipo) => void;
   onOpenHojaVida: (eq: Equipo) => void;
   onDelete: (eq: Equipo) => void;
+  searchQuery?: string;
+  onSearchChange?: (q: string) => void;
+  onEquiposChanged?: () => void;
 }
 
 interface ActiveMenuState {
@@ -74,19 +82,37 @@ interface ActiveMenuState {
 }
 
 export default function EquiposView({
-  equipos,
-  loading,
-  error,
+  equipos: equiposProp,
+  error: errorProp,
   onClearError,
   onOpenAdd,
   onOpenEdit,
   onOpenMantenimiento,
   onOpenHojaVida,
   onDelete,
+  searchQuery,
+  onSearchChange,
 }: EquiposViewProps) {
   const { usuarioActivo, puede, esClinico, esAuditor } = useAuth();
 
-  const [search, setSearch] = useState('');
+  // Estados de paginación servidor
+  const [paginaActual, setPaginaActual] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [equiposPaginados, setEquiposPaginados] = useState<Equipo[]>([]);
+  const [cargando, setCargando] = useState<boolean>(true);
+  const [errorSupabase, setErrorSupabase] = useState<string | null>(null);
+
+  // Estados de KPIs globales (consultas de recuento exacto en Supabase)
+  const [kpis, setKpis] = useState<{ total: number; operativos: number; mantenimiento: number }>({
+    total: 0,
+    operativos: 0,
+    mantenimiento: 0,
+  });
+
+  // Filtros interactivos
+  const [search, setSearch] = useState(searchQuery ?? '');
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [campoBusqueda, setCampoBusqueda] = useState<CampoBusquedaEquipo>('todos');
   const [estadoFiltro, setEstadoFiltro] = useState<EstadoEquipo | 'Todos'>('Todos');
   const [filtroUbicacion, setFiltroUbicacion] = useState<string>('todos');
@@ -95,6 +121,11 @@ export default function EquiposView({
   const [filtroVidaResidual, setFiltroVidaResidual] = useState<'todas' | 'vigente' | 'critica' | 'obsoleta'>('todas');
   const [filtroSoloConSerie, setFiltroSoloConSerie] = useState<boolean>(false);
   const [mostrarSubfiltros, setMostrarSubfiltros] = useState<boolean>(false);
+
+  // Opciones para dropdowns de filtros obtenidos de la base de datos
+  const [listaUbicaciones, setListaUbicaciones] = useState<string[]>([]);
+  const [listaMarcas, setListaMarcas] = useState<string[]>([]);
+  const [listaModalidades, setListaModalidades] = useState<string[]>([]);
 
   // Subfiltros interactivos por encabezado de columna (th)
   const [colFilters, setColFilters] = useState<{
@@ -117,10 +148,51 @@ export default function EquiposView({
     condicion_contractual: '',
   });
 
+  // Ordenamiento por columna
+  const [sortConfig, setSortConfig] = useState<ColumnSortState | null>(null);
+
   // Convenios vinculados para determinar la Condición Contractual
   const [convenios, setConvenios] = useState<Convenio[]>([]);
   const [convenioEquipos, setConvenioEquipos] = useState<ConvenioEquipo[]>([]);
 
+  // Estado del menú contextual
+  const [activeMenu, setActiveMenu] = useState<ActiveMenuState | null>(null);
+  const menuDropdownRef = useRef<HTMLDivElement | null>(null);
+  const [exportando, setExportando] = useState(false);
+
+  // Sincronizar búsqueda global si se envía desde el header
+  useEffect(() => {
+    if (searchQuery !== undefined && searchQuery !== search) {
+      setSearch(searchQuery);
+    }
+  }, [searchQuery, search]);
+
+  // Debounce del input de búsqueda (300ms)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [search]);
+
+  // Resetear a la primera página cuando cambian los filtros principales o la búsqueda
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [
+    debouncedSearch,
+    campoBusqueda,
+    estadoFiltro,
+    filtroUbicacion,
+    subfiltroMarca,
+    filtroModalidad,
+    filtroVidaResidual,
+    filtroSoloConSerie,
+    colFilters,
+    sortConfig,
+    pageSize,
+  ]);
+
+  // Cargar convenios para condición contractual
   useEffect(() => {
     let activo = true;
     async function cargarConvenios() {
@@ -134,7 +206,7 @@ export default function EquiposView({
           if (resV.data) setConvenioEquipos(resV.data as ConvenioEquipo[]);
         }
       } catch (e) {
-        console.error('Error cargando convenios en EquiposView:', e);
+        console.warn('Advertencia cargando convenios en EquiposView:', e);
       }
     }
     cargarConvenios();
@@ -143,85 +215,268 @@ export default function EquiposView({
     };
   }, []);
 
-  const [sortConfig, setSortConfig] = useState<ColumnSortState | null>(null);
+  // Cargar opciones únicas de Servicios Clínicos, Marcas y Modalidades
+  useEffect(() => {
+    let activo = true;
+    async function cargarOpcionesFiltros() {
+      try {
+        const { data, error } = await supabase
+          .from('equipos')
+          .select('ubicacion, marca, modalidad_adquisicion')
+          .limit(1000);
 
-  const handleSort = (key: string) => {
-    setSortConfig((prev) => {
-      if (prev?.key === key) {
-        if (prev.direction === 'asc') return { key, direction: 'desc' };
-        return null;
+        if (activo && !error && data) {
+          const uSet = new Set<string>();
+          const mSet = new Set<string>();
+          const modSet = new Set<string>();
+
+          data.forEach((row: { ubicacion?: string; marca?: string; modalidad_adquisicion?: string }) => {
+            if (row.ubicacion?.trim()) uSet.add(row.ubicacion.trim());
+            if (row.marca?.trim()) mSet.add(row.marca.trim());
+            if (row.modalidad_adquisicion?.trim()) modSet.add(row.modalidad_adquisicion.trim());
+          });
+
+          if (equiposProp) {
+            equiposProp.forEach((eq) => {
+              if (eq.ubicacion?.trim()) uSet.add(eq.ubicacion.trim());
+              if (eq.marca?.trim()) mSet.add(eq.marca.trim());
+              if (eq.modalidad_adquisicion?.trim()) modSet.add(eq.modalidad_adquisicion.trim());
+            });
+          }
+
+          setListaUbicaciones(Array.from(uSet).sort((a, b) => a.localeCompare(b)));
+          setListaMarcas(Array.from(mSet).sort((a, b) => a.localeCompare(b)));
+          setListaModalidades(Array.from(modSet).sort((a, b) => a.localeCompare(b)));
+        }
+      } catch (err) {
+        console.warn('Error cargando listas de filtros:', err);
       }
-      return { key, direction: 'asc' };
-    });
-  };
-
-  const handleColumnFilterChange = (key: keyof typeof colFilters, value: string) => {
-    setColFilters((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const [activeMenu, setActiveMenu] = useState<ActiveMenuState | null>(null);
-  const menuDropdownRef = useRef<HTMLDivElement | null>(null);
-
-  // Filtrado institucional RBAC: Clínico / Solicitante solo ve equipos de su servicio clínico asignado
-  const equiposBase = useMemo(() => {
-    if (esClinico && usuarioActivo.servicio_clinico_asignado) {
-      const servTarget = usuarioActivo.servicio_clinico_asignado.trim().toLowerCase();
-      return equipos.filter((eq) => {
-        if (!eq.ubicacion) return false;
-        const ubi = eq.ubicacion.trim().toLowerCase();
-        return ubi === servTarget || ubi.includes(servTarget) || servTarget.includes(ubi);
-      });
     }
-    return equipos;
-  }, [equipos, esClinico, usuarioActivo.servicio_clinico_asignado]);
+    cargarOpcionesFiltros();
+    return () => {
+      activo = false;
+    };
+  }, [equiposProp]);
 
-  // Lista de Servicios Clínicos únicos para el Filtro Principal
-  const listaUbicaciones = useMemo(() => {
-    const set = new Set<string>();
-    equiposBase.forEach((eq) => {
-      if (eq.ubicacion && eq.ubicacion.trim()) set.add(eq.ubicacion.trim());
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [equiposBase]);
+  // Consultar KPIs globales de equipos en Supabase (HEAD exact count)
+  const fetchKpis = useCallback(async () => {
+    try {
+      let qTotal = supabase.from('equipos').select('*', { count: 'exact', head: true });
+      let qOper = supabase.from('equipos').select('*', { count: 'exact', head: true }).eq('estado', 'Operativo');
+      let qMant = supabase.from('equipos').select('*', { count: 'exact', head: true }).eq('estado', 'Mantenimiento');
 
-  // Subfiltro en cascada: Marcas disponibles (si se selecciona un servicio clínico, solo muestra las marcas de ese servicio)
-  const listaMarcasEnUbicacion = useMemo(() => {
-    const set = new Set<string>();
-    const base =
-      filtroUbicacion === 'todos'
-        ? equiposBase
-        : equiposBase.filter(
-            (eq) => eq.ubicacion && eq.ubicacion.trim().toLowerCase() === filtroUbicacion.toLowerCase()
-          );
-    base.forEach((eq) => {
-      if (eq.marca && eq.marca.trim()) set.add(eq.marca.trim());
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [equiposBase, filtroUbicacion]);
-
-  // Lista de Modalidades de Adquisición únicas
-  const listaModalidades = useMemo(() => {
-    const set = new Set<string>();
-    equiposBase.forEach((eq) => {
-      if (eq.modalidad_adquisicion && eq.modalidad_adquisicion.trim()) {
-        set.add(eq.modalidad_adquisicion.trim());
+      if (esClinico && usuarioActivo.servicio_clinico_asignado) {
+        const serv = `%${usuarioActivo.servicio_clinico_asignado.trim()}%`;
+        qTotal = qTotal.ilike('ubicacion', serv);
+        qOper = qOper.ilike('ubicacion', serv);
+        qMant = qMant.ilike('ubicacion', serv);
       }
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [equiposBase]);
 
-  // Lista de todas las marcas únicas para el subfiltro de columna
-  const listaTodasMarcas = useMemo(() => {
-    const set = new Set<string>();
-    equiposBase.forEach((eq) => {
-      if (eq.marca && eq.marca.trim()) set.add(eq.marca.trim());
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [equiposBase]);
+      const [resTotal, resOper, resMant] = await Promise.all([qTotal, qOper, qMant]);
 
-  const listaEstadosEquipo = useMemo(() => {
-    return ['Operativo', 'Mantenimiento', 'Dado de baja'];
-  }, []);
+      setKpis({
+        total: resTotal.count ?? (equiposProp ? equiposProp.length : 0),
+        operativos: resOper.count ?? (equiposProp ? equiposProp.filter((e) => e.estado === 'Operativo').length : 0),
+        mantenimiento: resMant.count ?? (equiposProp ? equiposProp.filter((e) => e.estado === 'Mantenimiento').length : 0),
+      });
+    } catch (e) {
+      console.warn('Error al obtener KPIs exactos de Supabase:', e);
+      if (equiposProp && equiposProp.length > 0) {
+        setKpis({
+          total: equiposProp.length,
+          operativos: equiposProp.filter((e) => e.estado === 'Operativo').length,
+          mantenimiento: equiposProp.filter((e) => e.estado === 'Mantenimiento').length,
+        });
+      }
+    }
+  }, [esClinico, usuarioActivo.servicio_clinico_asignado, equiposProp]);
+
+  // Consulta paginada principal con Supabase
+  const fetchEquiposPaginados = useCallback(async () => {
+    setCargando(true);
+    setErrorSupabase(null);
+
+    try {
+      let query = supabase.from('equipos').select('*', { count: 'exact' });
+
+      // 1. RBAC Clínico: Restricción por servicio clínico asignado
+      if (esClinico && usuarioActivo.servicio_clinico_asignado) {
+        query = query.ilike('ubicacion', `%${usuarioActivo.servicio_clinico_asignado.trim()}%`);
+      }
+
+      // 2. Buscador integrado a nivel de base de datos
+      const term = debouncedSearch.trim();
+      if (term) {
+        // Sanitizar caracteres especiales para PostgREST ilike/or
+        const cleanTerm = term.replace(/[,()]/g, ' ').trim();
+        if (cleanTerm) {
+          switch (campoBusqueda) {
+            case 'codigo':
+              query = query.ilike('codigo', `%${cleanTerm}%`);
+              break;
+            case 'nombre':
+              query = query.ilike('nombre', `%${cleanTerm}%`);
+              break;
+            case 'serie':
+              query = query.ilike('serie', `%${cleanTerm}%`);
+              break;
+            case 'marca_modelo':
+              query = query.or(`marca.ilike.%${cleanTerm}%,modelo.ilike.%${cleanTerm}%`);
+              break;
+            case 'ubicacion':
+              query = query.ilike('ubicacion', `%${cleanTerm}%`);
+              break;
+            case 'inventario':
+              query = query.ilike('inventario', `%${cleanTerm}%`);
+              break;
+            case 'todos':
+            default:
+              query = query.or(
+                `codigo.ilike.%${cleanTerm}%,nombre.ilike.%${cleanTerm}%,serie.ilike.%${cleanTerm}%,marca.ilike.%${cleanTerm}%,modelo.ilike.%${cleanTerm}%,ubicacion.ilike.%${cleanTerm}%,inventario.ilike.%${cleanTerm}%`
+              );
+              break;
+          }
+        }
+      }
+
+      // 3. Filtro Estado Operativo
+      if (estadoFiltro !== 'Todos') {
+        query = query.eq('estado', estadoFiltro);
+      }
+
+      // 4. Filtro Ubicación (Servicio Clínico)
+      if (filtroUbicacion !== 'todos') {
+        query = query.eq('ubicacion', filtroUbicacion);
+      }
+
+      // 5. Subfiltro Marca
+      if (subfiltroMarca !== 'todas') {
+        query = query.eq('marca', subfiltroMarca);
+      }
+
+      // 6. Filtro Modalidad de Adquisición
+      if (filtroModalidad !== 'todas') {
+        query = query.eq('modalidad_adquisicion', filtroModalidad);
+      }
+
+      // 7. Subfiltro Vida Útil Residual
+      if (filtroVidaResidual !== 'todas') {
+        if (filtroVidaResidual === 'obsoleta') {
+          query = query.lte('vida_util_residual', 0);
+        } else if (filtroVidaResidual === 'critica') {
+          query = query.gt('vida_util_residual', 0).lte('vida_util_residual', 2);
+        } else if (filtroVidaResidual === 'vigente') {
+          query = query.gt('vida_util_residual', 2);
+        }
+      }
+
+      // 8. Subfiltro Solo con Serie
+      if (filtroSoloConSerie) {
+        query = query.not('serie', 'is', null).neq('serie', '').neq('serie', 'S/N').neq('serie', '—');
+      }
+
+      // 9. Subfiltros por Encabezados de Columna (AND aditivo)
+      if (colFilters.codigo.trim()) {
+        query = query.ilike('codigo', `%${colFilters.codigo.trim()}%`);
+      }
+      if (colFilters.ubicacion.trim() && colFilters.ubicacion.toLowerCase() !== 'todos') {
+        query = query.ilike('ubicacion', `%${colFilters.ubicacion.trim()}%`);
+      }
+      if (colFilters.nombre.trim()) {
+        query = query.ilike('nombre', `%${colFilters.nombre.trim()}%`);
+      }
+      if (
+        colFilters.marca.trim() &&
+        colFilters.marca.toLowerCase() !== 'todas' &&
+        colFilters.marca.toLowerCase() !== 'todos'
+      ) {
+        query = query.ilike('marca', `%${colFilters.marca.trim()}%`);
+      }
+      if (colFilters.modelo.trim()) {
+        query = query.ilike('modelo', `%${colFilters.modelo.trim()}%`);
+      }
+      if (colFilters.serie.trim()) {
+        query = query.ilike('serie', `%${colFilters.serie.trim()}%`);
+      }
+      if (colFilters.estado.trim() && colFilters.estado.toLowerCase() !== 'todos') {
+        query = query.eq('estado', colFilters.estado.trim());
+      }
+
+      // 10. Ordenamiento interactivo
+      if (sortConfig && sortConfig.key !== 'condicion_contractual') {
+        query = query.order(sortConfig.key, { ascending: sortConfig.direction === 'asc' });
+      } else {
+        query = query.order('created_at', { ascending: false });
+      }
+
+      // 11. Paginación Servidor con .range(desde, hasta)
+      const desde = (paginaActual - 1) * pageSize;
+      const hasta = desde + pageSize - 1;
+      query = query.range(desde, hasta);
+
+      const { data, count, error } = await query;
+
+      if (error) {
+        console.error('Error devuelto por Supabase al consultar equipos:', error);
+        setErrorSupabase(
+          `Error de Supabase: ${error.message || 'Fallo de consulta'}${
+            error.details ? ` (${error.details})` : ''
+          }${error.hint ? ` - Sugerencia: ${error.hint}` : ''}`
+        );
+        setEquiposPaginados([]);
+        setTotalCount(0);
+      } else {
+        const registros = (data as Equipo[]) || [];
+        setEquiposPaginados(registros);
+        setTotalCount(count ?? registros.length);
+        setErrorSupabase(null);
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err);
+      console.error('Error de red o RLS en Supabase:', err);
+      setErrorSupabase(`Error de conexión o RLS en Supabase: ${msg}`);
+      setEquiposPaginados([]);
+      setTotalCount(0);
+    } finally {
+      setCargando(false);
+    }
+  }, [
+    debouncedSearch,
+    campoBusqueda,
+    estadoFiltro,
+    filtroUbicacion,
+    subfiltroMarca,
+    filtroModalidad,
+    filtroVidaResidual,
+    filtroSoloConSerie,
+    colFilters,
+    sortConfig,
+    paginaActual,
+    pageSize,
+    esClinico,
+    usuarioActivo.servicio_clinico_asignado,
+  ]);
+
+  // Ejecutar consulta al cambiar dependencias
+  useEffect(() => {
+    fetchEquiposPaginados();
+  }, [fetchEquiposPaginados]);
+
+  // Cargar KPIs iniciales y escuchar eventos de actualización de equipos
+  useEffect(() => {
+    fetchKpis();
+
+    const handleUpdate = () => {
+      fetchKpis();
+      fetchEquiposPaginados();
+    };
+
+    window.addEventListener('equipos_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('equipos_updated', handleUpdate);
+    };
+  }, [fetchKpis, fetchEquiposPaginados]);
 
   // Mapa de condición contractual por ID de equipo según convenios activos
   const condicionContractualMap = useMemo(() => {
@@ -241,8 +496,7 @@ export default function EquiposView({
 
     const hoy = new Date();
 
-    equiposBase.forEach((eq) => {
-      // Buscar si el equipo tiene un vínculo activo en convenio_equipos
+    equiposPaginados.forEach((eq) => {
       const vinculo = convenioEquipos.find(
         (v) => v.equipo_id === eq.id && v.estado_vinculo === 'Activo'
       );
@@ -268,14 +522,12 @@ export default function EquiposView({
         return;
       }
 
-      // Calcular días restantes de vigencia
       let diasRestantes = 999;
       if (conv.fecha_termino) {
         const fTerm = new Date(conv.fecha_termino);
         diasRestantes = Math.ceil((fTerm.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
       }
 
-      // Si el convenio expiró en fecha o está marcado como Vencido / Finalizado
       if (diasRestantes < 0 || conv.estado === 'Vencido' || conv.estado === 'Finalizado') {
         map.set(eq.id, {
           tipo: 'vencido',
@@ -290,7 +542,6 @@ export default function EquiposView({
         return;
       }
 
-      // 1. Verde: "En Garantía" (si el convenio es de tipo garantía y está dentro de vigencia)
       if (conv.tipo_convenio === 'Garantía') {
         map.set(eq.id, {
           tipo: 'garantia',
@@ -305,7 +556,6 @@ export default function EquiposView({
         return;
       }
 
-      // 2. Ámbar: "Comodato por Vencer" (si faltan menos de 60 días para la fecha de término)
       if (diasRestantes >= 0 && diasRestantes <= 60) {
         const label =
           conv.tipo_convenio === 'Comodato'
@@ -327,7 +577,6 @@ export default function EquiposView({
         return;
       }
 
-      // 3. Azul: "Comodato Vigente" / "Arriendo Vigente"
       const label =
         conv.tipo_convenio === 'Comodato'
           ? 'Comodato Vigente'
@@ -348,7 +597,7 @@ export default function EquiposView({
     });
 
     return map;
-  }, [equiposBase, convenioEquipos, convenios]);
+  }, [equiposPaginados, convenioEquipos, convenios]);
 
   // Manejo de clicks y escape para menú de acciones
   useEffect(() => {
@@ -371,26 +620,6 @@ export default function EquiposView({
       window.removeEventListener('scroll', handleResizeOrScroll);
     };
   }, [activeMenu]);
-
-  useEffect(() => {
-    setActiveMenu(null);
-  }, [
-    search,
-    campoBusqueda,
-    estadoFiltro,
-    filtroUbicacion,
-    subfiltroMarca,
-    filtroModalidad,
-    filtroVidaResidual,
-    filtroSoloConSerie,
-  ]);
-
-  // Si cambia el servicio clínico y la marca seleccionada ya no existe en el subfiltro, se reinicia
-  useEffect(() => {
-    if (subfiltroMarca !== 'todas' && !listaMarcasEnUbicacion.includes(subfiltroMarca)) {
-      setSubfiltroMarca('todas');
-    }
-  }, [filtroUbicacion, listaMarcasEnUbicacion, subfiltroMarca]);
 
   const toggleMenu = useCallback(
     (eq: Equipo, e: React.MouseEvent<HTMLButtonElement>) => {
@@ -426,210 +655,19 @@ export default function EquiposView({
     [activeMenu]
   );
 
-  // Filtrado compuesto con búsqueda específica por campo y subfiltros
-  const filtered = useMemo(() => {
-    return equiposBase.filter((eq) => {
-      // 1. Búsqueda específica según el campo seleccionado
-      const q = search.trim().toLowerCase();
-      if (q !== '') {
-        switch (campoBusqueda) {
-          case 'codigo':
-            if (!eq.codigo.toLowerCase().includes(q)) return false;
-            break;
-          case 'nombre':
-            if (!eq.nombre.toLowerCase().includes(q)) return false;
-            break;
-          case 'marca_modelo': {
-            const matchMarca = eq.marca && eq.marca.toLowerCase().includes(q);
-            const matchModelo = eq.modelo && eq.modelo.toLowerCase().includes(q);
-            if (!matchMarca && !matchModelo) return false;
-            break;
-          }
-          case 'serie':
-            if (!eq.serie || !eq.serie.toLowerCase().includes(q)) return false;
-            break;
-          case 'ubicacion':
-            if (!eq.ubicacion || !eq.ubicacion.toLowerCase().includes(q)) return false;
-            break;
-          case 'inventario':
-            if (!eq.inventario || !eq.inventario.toLowerCase().includes(q)) return false;
-            break;
-          case 'todos':
-          default: {
-            const matchesGlobal =
-              eq.nombre.toLowerCase().includes(q) ||
-              eq.codigo.toLowerCase().includes(q) ||
-              (eq.marca && eq.marca.toLowerCase().includes(q)) ||
-              (eq.modelo && eq.modelo.toLowerCase().includes(q)) ||
-              (eq.serie && eq.serie.toLowerCase().includes(q)) ||
-              (eq.ubicacion && eq.ubicacion.toLowerCase().includes(q)) ||
-              (eq.inventario && eq.inventario.toLowerCase().includes(q));
-            if (!matchesGlobal) return false;
-            break;
-          }
-        }
+  const handleSort = (key: string) => {
+    setSortConfig((prev) => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
       }
-
-      // 2. Filtro Estado Operativo
-      if (estadoFiltro !== 'Todos' && eq.estado !== estadoFiltro) {
-        return false;
-      }
-
-      // 3. Filtro Principal: Servicio Clínico
-      if (filtroUbicacion !== 'todos') {
-        if (!eq.ubicacion || eq.ubicacion.trim().toLowerCase() !== filtroUbicacion.toLowerCase()) {
-          return false;
-        }
-      }
-
-      // 4. Subfiltro en cascada: Marca
-      if (subfiltroMarca !== 'todas') {
-        if (!eq.marca || eq.marca.trim().toLowerCase() !== subfiltroMarca.toLowerCase()) {
-          return false;
-        }
-      }
-
-      // 5. Filtro: Modalidad de Adquisición
-      if (filtroModalidad !== 'todas') {
-        if (!eq.modalidad_adquisicion || eq.modalidad_adquisicion.trim() !== filtroModalidad) {
-          return false;
-        }
-      }
-
-      // 6. Subfiltro: Vida Útil Residual / Condición
-      if (filtroVidaResidual !== 'todas') {
-        const residual =
-          eq.vida_util_residual !== null && eq.vida_util_residual !== undefined
-            ? Number(eq.vida_util_residual)
-            : null;
-        if (filtroVidaResidual === 'obsoleta') {
-          if (residual === null || residual > 0) return false;
-        } else if (filtroVidaResidual === 'critica') {
-          if (residual === null || residual <= 0 || residual > 2) return false;
-        } else if (filtroVidaResidual === 'vigente') {
-          if (residual === null || residual <= 2) return false;
-        }
-      }
-
-      // 7. Subfiltro: Solo con Serie Registrada
-      if (filtroSoloConSerie) {
-        if (!eq.serie || eq.serie.trim() === '' || eq.serie === 'S/N' || eq.serie === '—') {
-          return false;
-        }
-      }
-
-      // 8. Subfiltros por Encabezados de Columna (AND aditivo)
-      if (colFilters.codigo.trim()) {
-        const c = colFilters.codigo.trim().toLowerCase();
-        if (!eq.codigo.toLowerCase().includes(c)) return false;
-      }
-      if (colFilters.ubicacion.trim() && colFilters.ubicacion.toLowerCase() !== 'todos') {
-        const u = colFilters.ubicacion.trim().toLowerCase();
-        if (!eq.ubicacion || !eq.ubicacion.toLowerCase().includes(u)) return false;
-      }
-      if (colFilters.nombre.trim()) {
-        const n = colFilters.nombre.trim().toLowerCase();
-        if (!eq.nombre.toLowerCase().includes(n)) return false;
-      }
-      if (
-        colFilters.marca.trim() &&
-        colFilters.marca.toLowerCase() !== 'todas' &&
-        colFilters.marca.toLowerCase() !== 'todos'
-      ) {
-        const m = colFilters.marca.trim().toLowerCase();
-        if (!eq.marca || !eq.marca.toLowerCase().includes(m)) return false;
-      }
-      if (colFilters.modelo.trim()) {
-        const mod = colFilters.modelo.trim().toLowerCase();
-        if (!eq.modelo || !eq.modelo.toLowerCase().includes(mod)) return false;
-      }
-      if (colFilters.serie.trim()) {
-        const s = colFilters.serie.trim().toLowerCase();
-        if (!eq.serie || !eq.serie.toLowerCase().includes(s)) return false;
-      }
-      if (colFilters.estado.trim() && colFilters.estado.toLowerCase() !== 'todos') {
-        const est = colFilters.estado.trim().toLowerCase();
-        if (!eq.estado || eq.estado.toLowerCase() !== est) return false;
-      }
-      if (
-        colFilters.condicion_contractual.trim() &&
-        colFilters.condicion_contractual.toLowerCase() !== 'todos'
-      ) {
-        const cond = condicionContractualMap.get(eq.id);
-        const condLabel = cond ? cond.label.toLowerCase() : 'sin convenio / vencido';
-        const target = colFilters.condicion_contractual.trim().toLowerCase();
-        if (!condLabel.includes(target) && target !== condLabel) return false;
-      }
-
-      return true;
+      return { key, direction: 'asc' };
     });
+  };
 
-    // Ordenamiento interactivo por encabezado de columna
-    if (sortConfig) {
-      const { key, direction } = sortConfig;
-      const factor = direction === 'asc' ? 1 : -1;
-      return [...res].sort((a, b) => {
-        let valA = '';
-        let valB = '';
-        switch (key) {
-          case 'codigo':
-            valA = a.codigo || '';
-            valB = b.codigo || '';
-            break;
-          case 'ubicacion':
-            valA = a.ubicacion || '';
-            valB = b.ubicacion || '';
-            break;
-          case 'nombre':
-            valA = a.nombre || '';
-            valB = b.nombre || '';
-            break;
-          case 'marca':
-            valA = a.marca || '';
-            valB = b.marca || '';
-            break;
-          case 'modelo':
-            valA = a.modelo || '';
-            valB = b.modelo || '';
-            break;
-          case 'serie':
-            valA = a.serie || '';
-            valB = b.serie || '';
-            break;
-          case 'estado':
-            valA = a.estado || '';
-            valB = b.estado || '';
-            break;
-          case 'condicion_contractual':
-            valA = condicionContractualMap.get(a.id)?.label || '';
-            valB = condicionContractualMap.get(b.id)?.label || '';
-            break;
-          default:
-            return 0;
-        }
-        return valA.localeCompare(valB) * factor;
-      });
-    }
-
-    return res;
-  }, [
-    equiposBase,
-    search,
-    campoBusqueda,
-    estadoFiltro,
-    filtroUbicacion,
-    subfiltroMarca,
-    filtroModalidad,
-    filtroVidaResidual,
-    filtroSoloConSerie,
-    colFilters,
-    sortConfig,
-    condicionContractualMap,
-  ]);
-
-  const total = equiposBase.length;
-  const operativos = equiposBase.filter((e) => e.estado === 'Operativo').length;
-  const mantenimiento = equiposBase.filter((e) => e.estado === 'Mantenimiento').length;
+  const handleColumnFilterChange = (key: keyof typeof colFilters, value: string) => {
+    setColFilters((prev) => ({ ...prev, [key]: value }));
+  };
 
   // Contador de filtros activos
   const filtrosActivos = useMemo(() => {
@@ -660,6 +698,7 @@ export default function EquiposView({
 
   const handleLimpiarTodosLosFiltros = () => {
     setSearch('');
+    if (onSearchChange) onSearchChange('');
     setCampoBusqueda('todos');
     setEstadoFiltro('Todos');
     setFiltroUbicacion('todos');
@@ -678,96 +717,147 @@ export default function EquiposView({
       condicion_contractual: '',
     });
     setSortConfig(null);
+    setPaginaActual(1);
   };
 
-  function handleExportCSV() {
-    if (filtered.length === 0) return;
+  // Cálculos de navegación de páginas
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const registroInicio = totalCount === 0 ? 0 : (paginaActual - 1) * pageSize + 1;
+  const registroFin = Math.min((paginaActual - 1) * pageSize + pageSize, totalCount);
 
-    const columnas: ExportColumn<Equipo>[] = [
-      {
-        header: 'Código UEM',
-        accessor: (eq) => eq.codigo,
-      },
-      {
-        header: 'Nombre del Equipo',
-        accessor: (eq) => eq.nombre,
-      },
-      {
-        header: 'Marca',
-        accessor: (eq) => eq.marca || '—',
-      },
-      {
-        header: 'Modelo',
-        accessor: (eq) => eq.modelo || '—',
-      },
-      {
-        header: 'Serie',
-        accessor: (eq) => eq.serie || 'S/N',
-      },
-      {
-        header: 'Servicio Clínico / Ubicación',
-        accessor: (eq) => eq.ubicacion || '—',
-      },
-      {
-        header: 'Estado Operativo',
-        accessor: (eq) => eq.estado || '—',
-      },
-      {
-        header: 'Condición Contractual',
-        accessor: (eq) => {
-          const cond = condicionContractualMap.get(eq.id);
-          return cond ? cond.label : 'Sin Convenio / Vencido';
-        },
-      },
-      {
-        header: 'Convenio Asociado',
-        accessor: (eq) => {
-          const cond = condicionContractualMap.get(eq.id);
-          return cond?.convenioCodigo ? `${cond.convenioCodigo}: ${cond.convenioNombre}` : '—';
-        },
-      },
-      {
-        header: 'Criticidad',
-        accessor: (eq) => {
-          const crit = (eq as unknown as { criticidad?: string }).criticidad;
-          if (crit) return crit;
-          const u = (eq.ubicacion || '').toUpperCase();
-          if (
-            u.includes('UCI') ||
-            u.includes('UTI') ||
-            u.includes('PABELL') ||
-            u.includes('URGENC') ||
-            u.includes('UPC')
-          ) {
-            return 'Alta';
-          }
-          return 'Media';
-        },
-      },
-      {
-        header: 'Frecuencia de Mantención',
-        accessor: (eq) => {
-          return (
-            (eq as unknown as { frecuencia_mantencion?: string; frecuencia?: string }).frecuencia_mantencion ||
-            (eq as unknown as { frecuencia?: string }).frecuencia ||
-            'Semestral'
+  // Manejo de exportación a CSV con volumen amplio
+  async function handleExportCSV() {
+    setExportando(true);
+    try {
+      let query = supabase.from('equipos').select('*');
+
+      if (esClinico && usuarioActivo.servicio_clinico_asignado) {
+        query = query.ilike('ubicacion', `%${usuarioActivo.servicio_clinico_asignado.trim()}%`);
+      }
+
+      const term = debouncedSearch.trim();
+      if (term) {
+        const cleanTerm = term.replace(/[,()]/g, ' ').trim();
+        if (cleanTerm) {
+          query = query.or(
+            `codigo.ilike.%${cleanTerm}%,nombre.ilike.%${cleanTerm}%,serie.ilike.%${cleanTerm}%,marca.ilike.%${cleanTerm}%,modelo.ilike.%${cleanTerm}%,ubicacion.ilike.%${cleanTerm}%,inventario.ilike.%${cleanTerm}%`
           );
-        },
-      },
-    ];
+        }
+      }
 
-    exportarACSV(filtered, columnas, 'Equipos_Catastro_Filtrados');
+      if (estadoFiltro !== 'Todos') query = query.eq('estado', estadoFiltro);
+      if (filtroUbicacion !== 'todos') query = query.eq('ubicacion', filtroUbicacion);
+      if (subfiltroMarca !== 'todas') query = query.eq('marca', subfiltroMarca);
+      if (filtroModalidad !== 'todas') query = query.eq('modalidad_adquisicion', filtroModalidad);
+
+      // Limitar a máximo 5.000 para no sobrecargar descarga
+      query = query.limit(5000);
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const itemsAExportar = (data as Equipo[]) || equiposPaginados;
+
+      const columnas: ExportColumn<Equipo>[] = [
+        { header: 'Código UEM', accessor: (eq) => eq.codigo },
+        { header: 'Nombre del Equipo', accessor: (eq) => eq.nombre },
+        { header: 'Marca', accessor: (eq) => eq.marca || '—' },
+        { header: 'Modelo', accessor: (eq) => eq.modelo || '—' },
+        { header: 'Serie', accessor: (eq) => eq.serie || 'S/N' },
+        { header: 'Servicio Clínico / Ubicación', accessor: (eq) => eq.ubicacion || '—' },
+        { header: 'Estado Operativo', accessor: (eq) => eq.estado || '—' },
+        {
+          header: 'Condición Contractual',
+          accessor: (eq) => {
+            const cond = condicionContractualMap.get(eq.id);
+            return cond ? cond.label : 'Sin Convenio / Vencido';
+          },
+        },
+        {
+          header: 'Convenio Asociado',
+          accessor: (eq) => {
+            const cond = condicionContractualMap.get(eq.id);
+            return cond?.convenioCodigo ? `${cond.convenioCodigo}: ${cond.convenioNombre}` : '—';
+          },
+        },
+      ];
+
+      exportarACSV(itemsAExportar, columnas, `Catastro_Equipos_${itemsAExportar.length}_registros`);
+    } catch (e) {
+      console.warn('Fallo en descarga masiva de CSV, exportando página visible:', e);
+      const columnas: ExportColumn<Equipo>[] = [
+        { header: 'Código UEM', accessor: (eq) => eq.codigo },
+        { header: 'Nombre del Equipo', accessor: (eq) => eq.nombre },
+        { header: 'Marca', accessor: (eq) => eq.marca || '—' },
+        { header: 'Modelo', accessor: (eq) => eq.modelo || '—' },
+        { header: 'Serie', accessor: (eq) => eq.serie || 'S/N' },
+        { header: 'Servicio Clínico / Ubicación', accessor: (eq) => eq.ubicacion || '—' },
+        { header: 'Estado Operativo', accessor: (eq) => eq.estado || '—' },
+      ];
+      exportarACSV(equiposPaginados, columnas, 'Catastro_Equipos_Pagina');
+    } finally {
+      setExportando(false);
+    }
   }
 
   return (
     <div>
-      {error && (
+      {/* Alerta de Error de Supabase exacto (RLS, Red o BD) */}
+      {errorSupabase && (
+        <div
+          id="alert-error-supabase-equipos"
+          role="alert"
+          className="mb-6 rounded-2xl border border-rose-300 bg-rose-50 p-4 shadow-sm animate-in fade-in"
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-rose-600 text-white shadow-xs">
+              <AlertCircle className="h-5 w-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-rose-950">
+                  Fallo en Consulta a Base de Datos (Supabase)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setErrorSupabase(null)}
+                  className="rounded-lg p-1 text-rose-500 hover:bg-rose-100 hover:text-rose-800"
+                  title="Cerrar alerta"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-rose-800 font-mono bg-white/80 rounded-lg p-2.5 border border-rose-200 break-all select-all">
+                {errorSupabase}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchEquiposPaginados}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 transition active:scale-95 cursor-pointer"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Reintentar Consulta</span>
+                </button>
+                <span className="text-[11px] text-rose-700">
+                  Si persiste, verifique políticas de acceso RLS o conectividad con PostgREST.
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alerta de error heredado de props si existe */}
+      {errorProp && !errorSupabase && (
         <div className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <div className="flex-1">{error}</div>
-          <button onClick={onClearError} className="text-rose-500 hover:text-rose-700">
-            ×
-          </button>
+          <div className="flex-1">{errorProp}</div>
+          {onClearError && (
+            <button onClick={onClearError} className="text-rose-500 hover:text-rose-700">
+              ×
+            </button>
+          )}
         </div>
       )}
 
@@ -787,7 +877,7 @@ export default function EquiposView({
                 <span className="font-bold underline decoration-emerald-600">
                   {usuarioActivo.servicio_clinico_asignado}
                 </span>{' '}
-                ({total} de {equipos.length} equipos hospitalarios totales).
+                ({kpis.total.toLocaleString()} equipos vinculados).
               </p>
             </div>
           </div>
@@ -813,31 +903,48 @@ export default function EquiposView({
         </div>
       )}
 
-      {/* Header bar with Add Button if user has permission */}
+      {/* Header bar con Título y Botón Agregar Equipo */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
           <h2 className="text-lg font-bold text-slate-900">Catastro Hospitalario de Equipos</h2>
           <p className="text-xs text-slate-500">
-            Inventario técnico, ubicación asistencial y estado operativo
+            Inventario técnico asistencial con paginación servidor de alto rendimiento ({kpis.total.toLocaleString()} registros en total)
           </p>
         </div>
 
-        {puede('crear_equipos') && (
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
-            onClick={onOpenAdd}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.98]"
+            onClick={() => {
+              fetchKpis();
+              fetchEquiposPaginados();
+            }}
+            disabled={cargando}
+            title="Refrescar catálogo desde Supabase"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 active:scale-95 transition disabled:opacity-50 cursor-pointer"
           >
-            <Plus className="h-4 w-4" />
-            <span>Agregar Equipo</span>
+            <RefreshCw className={`h-3.5 w-3.5 ${cargando ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
+            <span className="hidden sm:inline">Actualizar</span>
           </button>
-        )}
+
+          {puede('crear_equipos') && (
+            <button
+              type="button"
+              onClick={onOpenAdd}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.98] cursor-pointer"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Agregar Equipo</span>
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Dashboard de KPIs conectado con recuentos globales exactos */}
       <Dashboard
-        total={total}
-        operativos={operativos}
-        mantenimiento={mantenimiento}
+        total={kpis.total}
+        operativos={kpis.operativos}
+        mantenimiento={kpis.mantenimiento}
         selectedEstado={estadoFiltro}
         onSelectEstado={setEstadoFiltro}
       />
@@ -853,7 +960,7 @@ export default function EquiposView({
                 <select
                   value={campoBusqueda}
                   onChange={(e) => setCampoBusqueda(e.target.value as CampoBusquedaEquipo)}
-                  title="Seleccionar campo específico para la búsqueda"
+                  title="Seleccionar campo específico para la búsqueda en todo el universo de equipos"
                   className="h-full rounded-l-xl border-r border-slate-200 bg-slate-50/90 py-2 pl-3 pr-7 text-xs font-semibold text-slate-700 hover:bg-slate-100 focus:bg-white focus:outline-none cursor-pointer transition-colors"
                 >
                   {CAMPOS_BUSQUEDA_EQUIPO.map((c) => (
@@ -870,17 +977,23 @@ export default function EquiposView({
                 <input
                   type="text"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    if (onSearchChange) onSearchChange(e.target.value);
+                  }}
                   placeholder={
                     CAMPOS_BUSQUEDA_EQUIPO.find((c) => c.id === campoBusqueda)?.placeholder ||
-                    'Buscar...'
+                    'Buscar en todo el catastro...'
                   }
                   className="w-full bg-transparent py-2.5 pl-9 pr-8 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                 />
                 {search && (
                   <button
                     type="button"
-                    onClick={() => setSearch('')}
+                    onClick={() => {
+                      setSearch('');
+                      if (onSearchChange) onSearchChange('');
+                    }}
                     title="Borrar texto de búsqueda"
                     className="absolute right-2.5 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
                   >
@@ -893,8 +1006,18 @@ export default function EquiposView({
             {/* Botones de acción, contador y filtros rápidos */}
             <div className="flex flex-wrap items-center gap-2.5">
               <div className="text-xs text-slate-500 whitespace-nowrap">
-                Mostrando <span className="font-bold text-slate-900">{filtered.length}</span> de{' '}
-                <span className="font-bold text-slate-900">{equiposBase.length}</span> registros
+                {cargando ? (
+                  <span className="inline-flex items-center gap-1.5 text-blue-600 font-medium">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Consultando Supabase...
+                  </span>
+                ) : (
+                  <span>
+                    Coincidencias:{' '}
+                    <span className="font-bold text-slate-900">{totalCount.toLocaleString()}</span> de{' '}
+                    <span className="font-bold text-slate-900">{kpis.total.toLocaleString()}</span> equipos
+                  </span>
+                )}
               </div>
 
               {filtrosActivos > 0 && (
@@ -906,7 +1029,7 @@ export default function EquiposView({
                   title="Restablecer todos los filtros y búsqueda"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
-                  <span>Limpiar todos los filtros ({filtrosActivos})</span>
+                  <span>Limpiar filtros ({filtrosActivos})</span>
                 </button>
               )}
 
@@ -914,7 +1037,7 @@ export default function EquiposView({
               <button
                 type="button"
                 onClick={() => setMostrarSubfiltros((prev) => !prev)}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs font-semibold shadow-2xs transition-all active:scale-[0.98] ${
+                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs font-semibold shadow-2xs transition-all active:scale-[0.98] cursor-pointer ${
                   mostrarSubfiltros || filtrosActivos > (search.trim() ? 1 : 0)
                     ? 'border-blue-400 bg-blue-50 text-blue-700 ring-2 ring-blue-500/20'
                     : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
@@ -939,16 +1062,20 @@ export default function EquiposView({
                 type="button"
                 id="btn-exportar-equipos-csv"
                 onClick={handleExportCSV}
-                disabled={filtered.length === 0}
+                disabled={exportando || totalCount === 0}
                 title={
-                  filtered.length === 0
-                    ? 'No hay registros visibles para exportar'
-                    : `Exportar ${filtered.length} equipo(s) a Excel / CSV`
+                  totalCount === 0
+                    ? 'No hay registros para exportar'
+                    : `Exportar hasta ${totalCount.toLocaleString()} equipos a Excel / CSV`
                 }
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 shadow-2xs transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none cursor-pointer"
               >
-                <Download className="h-3.5 w-3.5 text-slate-500" />
-                <span>Exportar a Excel / CSV ({filtered.length})</span>
+                {exportando ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                ) : (
+                  <Download className="h-3.5 w-3.5 text-slate-500" />
+                )}
+                <span>Exportar CSV</span>
               </button>
             </div>
           </div>
@@ -965,7 +1092,7 @@ export default function EquiposView({
                   <button
                     key={e}
                     onClick={() => setEstadoFiltro(e)}
-                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
+                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all cursor-pointer ${
                       active
                         ? 'bg-slate-900 text-white shadow-xs'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -977,16 +1104,19 @@ export default function EquiposView({
               })}
             </div>
 
-            {filtrosActivos > 0 && (
-              <button
-                type="button"
-                onClick={handleLimpiarTodosLosFiltros}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-rose-600 hover:text-rose-700 transition-colors"
+            {/* Selector de tamaño de página integrado arriba también */}
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>Registros por página:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="rounded-lg border border-slate-300 bg-white py-1 px-2.5 text-xs font-semibold text-slate-800 shadow-2xs focus:border-blue-500 focus:outline-none cursor-pointer"
               >
-                <RotateCcw className="h-3 w-3" />
-                <span>Limpiar todos los filtros ({filtrosActivos})</span>
-              </button>
-            )}
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
           </div>
 
           {/* Panel de Filtros y Subfiltros Avanzados en Cascada */}
@@ -996,11 +1126,11 @@ export default function EquiposView({
                 <div className="flex items-center gap-2">
                   <SlidersHorizontal className="h-4 w-4 text-blue-600" />
                   <span className="text-xs font-bold uppercase tracking-wider text-blue-900">
-                    Panel de Filtros Específicos y Subfiltros en Cascada
+                    Filtros Avanzados Directos a Supabase
                   </span>
                 </div>
                 <span className="text-[11px] text-blue-600 font-medium">
-                  {filtered.length} {filtered.length === 1 ? 'equipo coincide' : 'equipos coinciden'}
+                  {totalCount.toLocaleString()} {totalCount === 1 ? 'equipo coincide' : 'equipos coinciden'}
                 </span>
               </div>
 
@@ -1027,30 +1157,25 @@ export default function EquiposView({
                   </span>
                 </div>
 
-                {/* 2. SUBFILTRO EN CASCADA: Marca en el servicio seleccionado */}
+                {/* 2. SUBFILTRO EN CASCADA: Marca */}
                 <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-2xs">
                   <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    2. Subfiltro: Marca
+                    2. Marca Fabricante
                   </label>
                   <select
                     value={subfiltroMarca}
                     onChange={(e) => setSubfiltroMarca(e.target.value)}
-                    disabled={listaMarcasEnUbicacion.length === 0}
-                    className="w-full rounded-md border border-slate-200 bg-slate-50/50 py-1.5 px-2.5 text-xs text-slate-800 focus:border-blue-500 focus:bg-white focus:outline-none cursor-pointer disabled:bg-slate-100 disabled:text-slate-400"
+                    className="w-full rounded-md border border-slate-200 bg-slate-50/50 py-1.5 px-2.5 text-xs text-slate-800 focus:border-blue-500 focus:bg-white focus:outline-none cursor-pointer"
                   >
-                    <option value="todas">
-                      {filtroUbicacion === 'todos'
-                        ? `Todas las marcas (${listaMarcasEnUbicacion.length})`
-                        : `Marcas en este servicio (${listaMarcasEnUbicacion.length})`}
-                    </option>
-                    {listaMarcasEnUbicacion.map((marca) => (
+                    <option value="todas">Todas las marcas ({listaMarcas.length})</option>
+                    {listaMarcas.map((marca) => (
                       <option key={marca} value={marca}>
                         {marca}
                       </option>
                     ))}
                   </select>
                   <span className="mt-1 block text-[10px] text-slate-400">
-                    Dependiente del servicio seleccionado
+                    Fabricante o marca comercial
                   </span>
                 </div>
 
@@ -1076,7 +1201,7 @@ export default function EquiposView({
                   </span>
                 </div>
 
-                {/* 4. SUBFILTRO: Vida Útil Residual / Condición */}
+                {/* 4. SUBFILTRO: Vida Útil Residual */}
                 <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-2xs">
                   <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                     4. Condición / Vida Residual
@@ -1117,17 +1242,17 @@ export default function EquiposView({
                   <button
                     type="button"
                     onClick={handleLimpiarTodosLosFiltros}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 hover:text-blue-900"
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 hover:text-blue-900 cursor-pointer"
                   >
                     <RotateCcw className="h-3 w-3" />
-                    <span>Restablecer todos los subfiltros</span>
+                    <span>Restablecer filtros avanzados</span>
                   </button>
                 )}
               </div>
             </div>
           )}
 
-          {/* Chips de Filtros y Subfiltros Activos */}
+          {/* Chips de Filtros Activos */}
           {filtrosActivos > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-100">
               <span className="text-[11px] font-semibold text-slate-500 mr-1">Filtros aplicados:</span>
@@ -1140,7 +1265,10 @@ export default function EquiposView({
                   &ldquo;{search}&rdquo;
                   <button
                     type="button"
-                    onClick={() => setSearch('')}
+                    onClick={() => {
+                      setSearch('');
+                      if (onSearchChange) onSearchChange('');
+                    }}
                     className="rounded-full p-0.5 hover:bg-blue-200/60"
                   >
                     <X className="h-3 w-3" />
@@ -1149,8 +1277,8 @@ export default function EquiposView({
               )}
 
               {estadoFiltro !== 'Todos' && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-slate-800 ring-1 ring-slate-300/60">
-                  <span className="font-semibold text-slate-900">Estado:</span> {estadoFiltro}
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-slate-700 ring-1 ring-slate-400/20">
+                  Estado: {estadoFiltro}
                   <button
                     type="button"
                     onClick={() => setEstadoFiltro('Todos')}
@@ -1162,12 +1290,12 @@ export default function EquiposView({
               )}
 
               {filtroUbicacion !== 'todos' && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-indigo-700 ring-1 ring-indigo-600/20">
-                  <span className="font-semibold text-indigo-900">Servicio:</span> {filtroUbicacion}
+                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-indigo-700 ring-1 ring-indigo-500/20">
+                  Servicio: {filtroUbicacion}
                   <button
                     type="button"
                     onClick={() => setFiltroUbicacion('todos')}
-                    className="rounded-full p-0.5 hover:bg-indigo-200/60"
+                    className="rounded-full p-0.5 hover:bg-indigo-200"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -1175,43 +1303,12 @@ export default function EquiposView({
               )}
 
               {subfiltroMarca !== 'todas' && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-purple-700 ring-1 ring-purple-600/20">
-                  <span className="font-semibold text-purple-900">Subfiltro Marca:</span> {subfiltroMarca}
+                <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-teal-700 ring-1 ring-teal-500/20">
+                  Marca: {subfiltroMarca}
                   <button
                     type="button"
                     onClick={() => setSubfiltroMarca('todas')}
-                    className="rounded-full p-0.5 hover:bg-purple-200/60"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              )}
-
-              {filtroModalidad !== 'todas' && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-600/20">
-                  <span className="font-semibold text-amber-900">Modalidad:</span> {filtroModalidad}
-                  <button
-                    type="button"
-                    onClick={() => setFiltroModalidad('todas')}
-                    className="rounded-full p-0.5 hover:bg-amber-200/60"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              )}
-
-              {filtroVidaResidual !== 'todas' && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-rose-700 ring-1 ring-rose-600/20">
-                  <span className="font-semibold text-rose-900">Condición:</span>{' '}
-                  {filtroVidaResidual === 'vigente'
-                    ? 'Vigente'
-                    : filtroVidaResidual === 'critica'
-                    ? 'Crítica (≤ 2 años)'
-                    : 'Obsolescencia (0 años)'}
-                  <button
-                    type="button"
-                    onClick={() => setFiltroVidaResidual('todas')}
-                    className="rounded-full p-0.5 hover:bg-rose-200/60"
+                    className="rounded-full p-0.5 hover:bg-teal-200"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -1219,37 +1316,36 @@ export default function EquiposView({
               )}
 
               {filtroSoloConSerie && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-600/20">
-                  <span>Solo con N° Serie auditado</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 py-0.5 pl-2.5 pr-1.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-500/20">
+                  Con Serie Registrada
                   <button
                     type="button"
                     onClick={() => setFiltroSoloConSerie(false)}
-                    className="rounded-full p-0.5 hover:bg-emerald-200/60"
+                    className="rounded-full p-0.5 hover:bg-amber-200"
                   >
                     <X className="h-3 w-3" />
                   </button>
                 </span>
               )}
-
-              <button
-                type="button"
-                onClick={handleLimpiarTodosLosFiltros}
-                className="ml-auto text-[11px] font-semibold text-slate-500 hover:text-slate-800 underline underline-offset-2"
-              >
-                Limpiar todo
-              </button>
             </div>
           )}
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto min-h-[200px]">
-          <table className="w-full min-w-[840px] text-left">
+        {/* Indicador sutil de recarga cuando la tabla ya tiene datos */}
+        {cargando && equiposPaginados.length > 0 && (
+          <div className="h-1 w-full bg-blue-100 overflow-hidden">
+            <div className="h-full bg-blue-600 animate-pulse w-full" />
+          </div>
+        )}
+
+        {/* Tabla Responsiva de Equipos */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-200">
+              <tr className="border-b border-slate-200 bg-slate-50/75">
                 <TableColumnHeader
                   id="th-equipos-codigo"
-                  title="Código / ID"
+                  title="Código UEM"
                   sortKey="codigo"
                   currentSort={sortConfig}
                   onSort={handleSort}
@@ -1265,15 +1361,15 @@ export default function EquiposView({
                   sortKey="ubicacion"
                   currentSort={sortConfig}
                   onSort={handleSort}
-                  filterType="select"
+                  filterType="text"
                   filterValue={colFilters.ubicacion}
                   onFilterChange={(v) => handleColumnFilterChange('ubicacion', v)}
-                  selectOptions={listaUbicaciones}
-                  className="min-w-[160px]"
+                  placeholder="Filtrar servicio..."
+                  className="min-w-[180px]"
                 />
                 <TableColumnHeader
                   id="th-equipos-nombre"
-                  title="Nombre / Equipo"
+                  title="Nombre del Equipo"
                   sortKey="nombre"
                   currentSort={sortConfig}
                   onSort={handleSort}
@@ -1281,7 +1377,7 @@ export default function EquiposView({
                   filterValue={colFilters.nombre}
                   onFilterChange={(v) => handleColumnFilterChange('nombre', v)}
                   placeholder="Filtrar nombre..."
-                  className="min-w-[180px]"
+                  className="min-w-[200px]"
                 />
                 <TableColumnHeader
                   id="th-equipos-marca"
@@ -1289,11 +1385,11 @@ export default function EquiposView({
                   sortKey="marca"
                   currentSort={sortConfig}
                   onSort={handleSort}
-                  filterType="select"
+                  filterType="text"
                   filterValue={colFilters.marca}
                   onFilterChange={(v) => handleColumnFilterChange('marca', v)}
-                  selectOptions={listaTodasMarcas}
-                  className="min-w-[130px]"
+                  placeholder="Filtrar marca..."
+                  className="min-w-[120px]"
                 />
                 <TableColumnHeader
                   id="th-equipos-modelo"
@@ -1328,7 +1424,7 @@ export default function EquiposView({
                   filterType="select"
                   filterValue={colFilters.estado}
                   onFilterChange={(v) => handleColumnFilterChange('estado', v)}
-                  selectOptions={listaEstadosEquipo}
+                  selectOptions={['Operativo', 'Mantenimiento', 'Dado de baja']}
                   className="min-w-[140px]"
                 />
                 <TableColumnHeader
@@ -1352,34 +1448,59 @@ export default function EquiposView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {loading && (
-                <tr>
-                  <td colSpan={8} className="px-5 py-16">
-                    <div className="flex items-center justify-center gap-2 text-slate-400">
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                      <span className="text-sm">Cargando equipos...</span>
-                    </div>
-                  </td>
-                </tr>
+              {/* Estado de Carga con Esqueleto Visual */}
+              {cargando && equiposPaginados.length === 0 && (
+                <>
+                  {Array.from({ length: Math.min(pageSize, 10) }).map((_, idx) => (
+                    <tr key={`skeleton-${idx}`} className="animate-pulse bg-white">
+                      <td className="px-5 py-4">
+                        <div className="h-6 w-24 rounded-lg bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-4 w-32 rounded bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-4 w-48 rounded bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-4 w-20 rounded bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-4 w-24 rounded bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-4 w-28 rounded bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-6 w-24 rounded-full bg-slate-200" />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="h-6 w-36 rounded-full bg-slate-200" />
+                      </td>
+                    </tr>
+                  ))}
+                </>
               )}
-              {!loading && filtered.length === 0 && (
+
+              {/* Estado Vacío */}
+              {!cargando && equiposPaginados.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-5 py-16">
                     <div className="flex flex-col items-center justify-center gap-2 text-slate-400">
-                      <Boxes className="h-10 w-10" />
-                      <p className="text-sm font-medium text-slate-500">
-                        No se encontraron equipos
+                      <Boxes className="h-10 w-10 text-slate-300" />
+                      <p className="text-sm font-semibold text-slate-600">
+                        No se encontraron equipos en esta consulta
                       </p>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs text-slate-400 text-center max-w-md">
                         {esClinico
-                          ? `No hay equipos registrados para el servicio ${usuarioActivo.servicio_clinico_asignado}`
-                          : 'Ajusta los filtros o agrega un nuevo equipo'}
+                          ? `No hay registros vinculados a ${usuarioActivo.servicio_clinico_asignado} con los filtros seleccionados.`
+                          : 'Intenta modificar el término de búsqueda o limpiar los filtros activos.'}
                       </p>
                       {filtrosActivos > 0 && (
                         <button
                           type="button"
                           onClick={handleLimpiarTodosLosFiltros}
-                          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition"
+                          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition cursor-pointer"
                         >
                           <RotateCcw className="h-3 w-3" />
                           <span>Restablecer todos los filtros</span>
@@ -1389,82 +1510,179 @@ export default function EquiposView({
                   </td>
                 </tr>
               )}
-              {!loading &&
-                filtered.map((eq) => (
-                  <tr key={eq.id} className="group transition-colors hover:bg-slate-50/70">
-                    <td className="px-5 py-4">
-                      <button
-                        type="button"
-                        onClick={(e) => toggleMenu(eq, e)}
-                        className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono text-xs font-semibold transition-all ${
-                          activeMenu?.equipo.id === eq.id
-                            ? 'bg-blue-100 text-blue-700 ring-2 ring-blue-500/20 shadow-sm'
-                            : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+
+              {/* Filas de Equipos Paginados */}
+              {equiposPaginados.map((eq) => (
+                <tr key={eq.id} className="group transition-colors hover:bg-slate-50/70">
+                  <td className="px-5 py-4">
+                    <button
+                      type="button"
+                      onClick={(e) => toggleMenu(eq, e)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono text-xs font-semibold transition-all cursor-pointer ${
+                        activeMenu?.equipo.id === eq.id
+                          ? 'bg-blue-100 text-blue-700 ring-2 ring-blue-500/20 shadow-sm'
+                          : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                      }`}
+                      title={`Acciones para ${eq.codigo}`}
+                    >
+                      {eq.codigo}
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                          activeMenu?.equipo.id === eq.id ? 'rotate-180 text-blue-700' : 'text-blue-500'
                         }`}
-                        title={`Acciones para ${eq.codigo}`}
-                      >
-                        {eq.codigo}
-                        <ChevronDown
-                          className={`h-3.5 w-3.5 transition-transform duration-200 ${
-                            activeMenu?.equipo.id === eq.id ? 'rotate-180 text-blue-700' : 'text-blue-500'
-                          }`}
-                        />
-                      </button>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-slate-700 font-medium">
-                      {eq.ubicacion ?? '—'}
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className="text-sm font-medium text-slate-900">{eq.nombre}</span>
-                    </td>
-                    <td className="px-5 py-4 text-sm text-slate-600">{eq.marca ?? '—'}</td>
-                    <td className="px-5 py-4 text-sm text-slate-600">{eq.modelo ?? '—'}</td>
-                    <td className="px-5 py-4">
-                      <span className="font-mono text-xs text-slate-600">{eq.serie ?? '—'}</span>
-                    </td>
-                    <td className="px-5 py-4">
-                      <EstadoBadge estado={eq.estado} />
-                    </td>
-                    <td className="px-5 py-4 whitespace-nowrap">
-                      {(() => {
-                        const cond = condicionContractualMap.get(eq.id) || {
-                          tipo: 'sin_convenio',
-                          label: 'Sin Convenio / Vencido',
-                          badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-400/20',
-                          dotClass: 'bg-slate-400',
-                        };
-                        return (
-                          <span
-                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ring-1 ${cond.badgeClass}`}
-                            title={
-                              cond.convenioCodigo
-                                ? `${cond.convenioCodigo}: ${cond.convenioNombre}${
-                                    cond.diasRestantes !== undefined
-                                      ? ` (${cond.diasRestantes} días restantes)`
-                                      : ''
-                                  }`
-                                : 'Sin convenio activo asociado'
-                            }
-                          >
-                            <span className={`h-1.5 w-1.5 rounded-full ${cond.dotClass}`} />
-                            {cond.label}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                  </tr>
-                ))}
+                      />
+                    </button>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-slate-700 font-medium">
+                    {eq.ubicacion ?? '—'}
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className="text-sm font-medium text-slate-900">{eq.nombre}</span>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-slate-600">{eq.marca ?? '—'}</td>
+                  <td className="px-5 py-4 text-sm text-slate-600">{eq.modelo ?? '—'}</td>
+                  <td className="px-5 py-4">
+                    <span className="font-mono text-xs text-slate-600">{eq.serie ?? '—'}</span>
+                  </td>
+                  <td className="px-5 py-4">
+                    <EstadoBadge estado={eq.estado} />
+                  </td>
+                  <td className="px-5 py-4 whitespace-nowrap">
+                    {(() => {
+                      const cond = condicionContractualMap.get(eq.id) || {
+                        tipo: 'sin_convenio',
+                        label: 'Sin Convenio / Vencido',
+                        badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-400/20',
+                        dotClass: 'bg-slate-400',
+                      };
+                      return (
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ring-1 ${cond.badgeClass}`}
+                          title={
+                            cond.convenioCodigo
+                              ? `${cond.convenioCodigo}: ${cond.convenioNombre}${
+                                  cond.diasRestantes !== undefined
+                                    ? ` (${cond.diasRestantes} días restantes)`
+                                    : ''
+                                }`
+                              : 'Sin convenio activo asociado'
+                          }
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${cond.dotClass}`} />
+                          {cond.label}
+                        </span>
+                      );
+                    })()}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3.5 text-xs text-slate-500">
-          <span>
-            Mostrando <span className="font-semibold text-slate-700">{filtered.length}</span> de{' '}
-            <span className="font-semibold text-slate-700">{total}</span> equipos
-            {esClinico && ` (Filtro por servicio: ${usuarioActivo.servicio_clinico_asignado})`}
-          </span>
-          <span className="hidden sm:inline">Sistema de Gestión de Equipos</span>
+        {/* BARRA DE NAVEGACIÓN INFERIOR CON PAGINACIÓN SERVIDOR */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-200 bg-slate-50/70 px-5 py-4 text-xs text-slate-600">
+          {/* Rango de registros y total general */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              Mostrando registros{' '}
+              <span className="font-bold text-slate-900">{registroInicio.toLocaleString()}</span> -{' '}
+              <span className="font-bold text-slate-900">{registroFin.toLocaleString()}</span> de{' '}
+              <span className="font-bold text-slate-900">{totalCount.toLocaleString()}</span> equipos
+            </span>
+            {esClinico && (
+              <span className="text-slate-400">
+                (Filtro asignado: {usuarioActivo.servicio_clinico_asignado})
+              </span>
+            )}
+          </div>
+
+          {/* Controles de Navegación: Primera, Anterior, Página X de N, Siguiente, Última */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Selector de tamaño de página inferior */}
+            <div className="flex items-center gap-1.5 mr-2">
+              <span className="text-[11px] text-slate-500">Filas:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="rounded-lg border border-slate-200 bg-white py-1 px-2 text-xs font-semibold text-slate-700 shadow-2xs focus:border-blue-500 focus:outline-none cursor-pointer"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1">
+              {/* Primera Página */}
+              <button
+                type="button"
+                onClick={() => setPaginaActual(1)}
+                disabled={paginaActual <= 1 || cargando}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 transition active:scale-95 cursor-pointer"
+                title="Ir a la primera página"
+              >
+                <ChevronsLeft className="h-3.5 w-3.5" />
+                <span className="hidden md:inline">Primera</span>
+              </button>
+
+              {/* Anterior */}
+              <button
+                type="button"
+                onClick={() => setPaginaActual((prev) => Math.max(1, prev - 1))}
+                disabled={paginaActual <= 1 || cargando}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 transition active:scale-95 cursor-pointer"
+                title="Página anterior"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                <span>Anterior</span>
+              </button>
+
+              {/* Indicador de Página y Salto Rápido */}
+              <div className="flex items-center gap-1.5 px-2">
+                <span className="font-semibold text-slate-700">Página</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={paginaActual}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val >= 1 && val <= totalPages) {
+                      setPaginaActual(val);
+                    }
+                  }}
+                  className="w-14 rounded-lg border border-slate-300 bg-white py-1 px-1.5 text-center text-xs font-bold text-slate-900 shadow-2xs focus:border-blue-500 focus:outline-none"
+                />
+                <span className="text-slate-500">de</span>
+                <span className="font-bold text-slate-800">{totalPages.toLocaleString()}</span>
+              </div>
+
+              {/* Siguiente */}
+              <button
+                type="button"
+                onClick={() => setPaginaActual((prev) => Math.min(totalPages, prev + 1))}
+                disabled={paginaActual >= totalPages || cargando}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 transition active:scale-95 cursor-pointer"
+                title="Página siguiente"
+              >
+                <span>Siguiente</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+
+              {/* Última Página */}
+              <button
+                type="button"
+                onClick={() => setPaginaActual(totalPages)}
+                disabled={paginaActual >= totalPages || cargando}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 transition active:scale-95 cursor-pointer"
+                title="Ir a la última página"
+              >
+                <span className="hidden md:inline">Última</span>
+                <ChevronsRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1507,7 +1725,7 @@ export default function EquiposView({
                     setActiveMenu(null);
                     onOpenMantenimiento(eq);
                   }}
-                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-amber-50 hover:text-amber-800"
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-amber-50 hover:text-amber-800 cursor-pointer"
                 >
                   <Wrench className="h-4 w-4 text-amber-500 flex-shrink-0" />
                   {esClinico ? 'Reportar Falla' : 'Ingresar Mantenimiento'}
@@ -1522,7 +1740,7 @@ export default function EquiposView({
                   setActiveMenu(null);
                   onOpenHojaVida(eq);
                 }}
-                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-blue-50 hover:text-blue-700 cursor-pointer"
               >
                 <ClipboardList className="h-4 w-4 text-blue-500 flex-shrink-0" />
                 Hoja de Vida
@@ -1537,7 +1755,7 @@ export default function EquiposView({
                     setActiveMenu(null);
                     onOpenEdit(eq);
                   }}
-                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 cursor-pointer"
                 >
                   <Pencil className="h-4 w-4 text-slate-400 flex-shrink-0" />
                   Editar
@@ -1555,7 +1773,7 @@ export default function EquiposView({
                       setActiveMenu(null);
                       onDelete(eq);
                     }}
-                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50"
+                    className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50 cursor-pointer"
                   >
                     <Trash2 className="h-4 w-4 text-rose-500 flex-shrink-0" />
                     Baja Definitiva / Eliminar

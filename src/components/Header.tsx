@@ -18,6 +18,7 @@ import {
   RotateCcw,
   LogOut,
   FileText,
+  UploadCloud,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { ROLES_SIMULABLES } from '@/lib/authRoles';
@@ -30,7 +31,13 @@ import {
 } from '@/lib/supabase';
 import NotificationInboxModal from '@/components/NotificationInboxModal';
 
-export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'convenios' | 'usuarios';
+export type AppTab =
+  | 'inventario'
+  | 'mantenimiento'
+  | 'externalizacion'
+  | 'convenios'
+  | 'usuarios'
+  | 'carga_masiva';
 
 interface HeaderProps {
   currentTab: AppTab;
@@ -118,6 +125,12 @@ export default function Header({
     user.rol === 'Ingeniero Supervisor' ||
     user.rol === 'Administrador (Jefe de Unidad)' ||
     user.rol?.includes('Administrador');
+
+  const rolActivo = user.rol || '';
+  const esAdminActivo =
+    esAdmin &&
+    !esModoSimulacion &&
+    (rolActivo === 'Administrador (Jefe de Unidad)' || rolActivo.includes('Administrador'));
 
   const esTecnico = user.rol === 'Ingeniero de Servicio / Técnico';
   const tieneCampana = esSupervisorOAdmin || esTecnico;
@@ -625,6 +638,25 @@ export default function Header({
               <Users className="h-4 w-4" />
               <span>Gestión de Usuarios</span>
               <span className="rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold px-1.5 py-0.2 ring-1 ring-purple-500/20">
+                Admin
+              </span>
+            </button>
+          )}
+
+          {/* Carga Masiva de Datos: visible única y exclusivamente para rol Administrador activo (sin simulación) */}
+          {esAdminActivo && (
+            <button
+              id="tab-carga-masiva"
+              onClick={() => onTabChange('carga_masiva')}
+              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                currentTab === 'carga_masiva'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <UploadCloud className="h-4 w-4" />
+              <span>Carga Masiva de Datos</span>
+              <span className="rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.2 ring-1 ring-indigo-500/20">
                 Admin
               </span>
             </button>

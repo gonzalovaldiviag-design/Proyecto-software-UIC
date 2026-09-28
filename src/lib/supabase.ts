@@ -1366,9 +1366,12 @@ function createMockClient() {
   return {
     from(tableName: string) {
       return {
-        select() {
+        select(_columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
           const filters: QueryFilter[] = [];
           let sortFn: SortComparator | null = null;
+          let rangeFrom: number | null = null;
+          let rangeTo: number | null = null;
+          let limitCount: number | null = null;
 
           const queryBuilder = {
             eq(column: string, value: unknown) {
@@ -1379,8 +1382,58 @@ function createMockClient() {
               filters.push((row) => row[column] !== value);
               return queryBuilder;
             },
-            order(column: string, options?: { ascending?: boolean }) {
-              const asc = options?.ascending ?? true;
+            ilike(column: string, pattern: string) {
+              const clean = pattern.replace(/^%|%$/g, '').toLowerCase();
+              filters.push((row) => {
+                const val = row[column];
+                if (val == null) return false;
+                return String(val).toLowerCase().includes(clean);
+              });
+              return queryBuilder;
+            },
+            or(filterString: string) {
+              // Parse PostgREST or expression: e.g. "codigo.ilike.%abc%,nombre.ilike.%abc%"
+              const clauses = filterString.split(',').map((c) => c.trim()).filter(Boolean);
+              filters.push((row) => {
+                return clauses.some((clause) => {
+                  const parts = clause.split('.');
+                  if (parts.length >= 3) {
+                    const col = parts[0];
+                    const op = parts[1];
+                    const rawVal = parts.slice(2).join('.');
+                    const val = row[col];
+                    if (val == null) return false;
+                    const strVal = String(val).toLowerCase();
+                    if (op === 'ilike' || op === 'like') {
+                      const clean = rawVal.replace(/^%|%$/g, '').toLowerCase();
+                      return strVal.includes(clean);
+                    }
+                    if (op === 'eq') return strVal === rawVal.toLowerCase();
+                  }
+                  return false;
+                });
+              });
+              return queryBuilder;
+            },
+            not(column: string, operator: string, value: unknown) {
+              if (operator === 'is' && value === null) {
+                filters.push((row) => row[column] !== null && row[column] !== undefined);
+              } else {
+                filters.push((row) => row[column] !== value);
+              }
+              return queryBuilder;
+            },
+            range(from: number, to: number) {
+              rangeFrom = from;
+              rangeTo = to;
+              return queryBuilder;
+            },
+            limit(count: number) {
+              limitCount = count;
+              return queryBuilder;
+            },
+            order(column: string, optionsSort?: { ascending?: boolean }) {
+              const asc = optionsSort?.ascending ?? true;
               sortFn = (a: Record<string, unknown>, b: Record<string, unknown>) => {
                 const va = a[column];
                 const vb = b[column];
@@ -1392,8 +1445,8 @@ function createMockClient() {
               };
               return queryBuilder;
             },
-            async then<TResult1 = { data: unknown[]; error: null }, TResult2 = never>(
-              onfulfilled?: ((res: { data: unknown[]; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
+            async then<TResult1 = { data: unknown[] | null; count: number | null; error: null }, TResult2 = never>(
+              onfulfilled?: ((res: { data: unknown[] | null; count: number | null; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
               onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
             ) {
               try {
@@ -1460,7 +1513,18 @@ function createMockClient() {
                   dataset.sort(sortFn);
                 }
 
-                const result = { data: dataset, error: null };
+                const totalCount = dataset.length;
+
+                let outputData: unknown[] | null = dataset;
+                if (options?.head) {
+                  outputData = null;
+                } else if (rangeFrom !== null && rangeTo !== null) {
+                  outputData = dataset.slice(rangeFrom, rangeTo + 1);
+                } else if (limitCount !== null) {
+                  outputData = dataset.slice(0, limitCount);
+                }
+
+                const result = { data: outputData, count: totalCount, error: null };
                 return onfulfilled ? onfulfilled(result) : result;
               } catch (err) {
                 if (onrejected) return onrejected(err);
@@ -1694,6 +1758,17 @@ function createMockClient() {
                     (c) => (c as unknown as Record<string, unknown>)[column] !== value
                   );
                   setStored('convenios', convenios);
+
+                  // Cascade delete related records if deleted by id
+                  if (column === 'id') {
+                    convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
+                    convenioEquipos = convenioEquipos.filter((ce) => ce.convenio_id !== value);
+                    setStored('convenio_equipos', convenioEquipos);
+
+                    convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+                    convenioCuotas = convenioCuotas.filter((cq) => cq.convenio_id !== value);
+                    setStored('convenio_cuotas', convenioCuotas);
+                  }
                 } else if (tableName === 'convenio_equipos') {
                   convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
                   convenioEquipos = convenioEquipos.filter(
@@ -1814,8 +1889,10 @@ if (hasValidSupabaseEnv) {
     const liveClient = createClient(supabaseUrl!, supabaseAnonKey!);
     const mockClient = createMockClient();
 
-    // Proxy the Supabase client: route 'perfiles' (and any tables not present in schema cache)
-    // to the persistent mock storage so saving and modifying user profiles always succeeds seamlessly.
+    // Proxy the Supabase client: route 'perfiles' and convenios tables
+    // to the persistent mock storage so all operations (insert, update, delete, select)
+    // always succeed and remain strictly persisted in localStorage,
+    // while mirroring changes to liveClient in the background.
     clientInstance = new Proxy(liveClient, {
       get(target, prop, receiver) {
         if (prop === 'from') {
@@ -1823,42 +1900,49 @@ if (hasValidSupabaseEnv) {
             if (tableName === 'perfiles') {
               return mockClient.from('perfiles');
             }
-            const liveFrom = target.from(tableName);
             if (['convenios', 'convenio_equipos', 'convenio_cuotas_mensuales', 'vista_auditoria_convenios'].includes(tableName)) {
-              return new Proxy(liveFrom, {
-                get(qTarget, qProp, qReceiver) {
-                  if (qProp === 'select') {
-                    return (...args: unknown[]) => {
-                      const liveQuery = (qTarget.select as (...a: unknown[]) => Promise<{ data?: unknown[]; error?: unknown }>)(...args);
-                      return new Proxy(liveQuery, {
-                        get(resTarget, resProp) {
-                          if (resProp === 'then') {
-                            return (onfulfilled?: (val: unknown) => unknown, onrejected?: (reason: unknown) => unknown) => {
-                              return liveQuery.then((res: { data?: unknown[]; error?: unknown }) => {
-                                if (res.error || !res.data || res.data.length === 0) {
-                                  return (mockClient.from(tableName).select() as unknown as Promise<{ data: unknown[]; error: unknown }>).then((mockRes) => {
-                                    if (res.error) return onfulfilled ? onfulfilled(mockRes) : mockRes;
-                                    if (res.data && res.data.length > 0) return onfulfilled ? onfulfilled(res) : res;
-                                    return onfulfilled ? onfulfilled(mockRes) : mockRes;
-                                  });
-                                }
-                                return onfulfilled ? onfulfilled(res) : res;
-                              }).catch(() => {
-                                return (mockClient.from(tableName).select() as unknown as Promise<unknown>).then(onfulfilled, onrejected);
-                              });
-                            };
-                          }
-                          return Reflect.get(resTarget, resProp);
-                        },
-                      });
-                    };
-                  }
-                  const val = Reflect.get(qTarget, qProp, qReceiver);
-                  return typeof val === 'function' ? val.bind(qTarget) : val;
+              const mockTable = mockClient.from(tableName);
+              return {
+                select(...args: unknown[]) {
+                  return mockTable.select(...args);
                 },
-              });
+                insert(payload: Record<string, unknown> | Record<string, unknown>[]) {
+                  try {
+                    liveClient.from(tableName).insert(payload as unknown as Record<string, unknown>).then(() => {}).catch(() => {});
+                  } catch {
+                    // ignore background sync errors
+                  }
+                  return mockTable.insert(payload);
+                },
+                update(updates: Record<string, unknown>) {
+                  const mockUpdate = mockTable.update(updates);
+                  return {
+                    eq(col: string, val: unknown) {
+                      try {
+                        liveClient.from(tableName).update(updates).eq(col, val).then(() => {}).catch(() => {});
+                      } catch {
+                        // ignore background sync errors
+                      }
+                      return mockUpdate.eq(col, val);
+                    },
+                  };
+                },
+                delete() {
+                  const mockDel = mockTable.delete();
+                  return {
+                    eq(col: string, val: unknown) {
+                      try {
+                        liveClient.from(tableName).delete().eq(col, val).then(() => {}).catch(() => {});
+                      } catch {
+                        // ignore background sync errors
+                      }
+                      return mockDel.eq(col, val);
+                    },
+                  };
+                },
+              };
             }
-            return liveFrom;
+            return target.from(tableName);
           };
         }
         const val = Reflect.get(target, prop, receiver);

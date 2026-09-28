@@ -16,12 +16,19 @@ import MantenimientosView from '@/components/MantenimientosView';
 import ExternalizacionView from '@/components/ExternalizacionView';
 import ConveniosView from '@/components/ConveniosView';
 import UsuariosView from '@/components/UsuariosView';
+import CargaMasivaView from '@/components/CargaMasivaView';
 import EquipoModal from '@/components/EquipoModal';
 import HojaVidaModal from '@/components/HojaVidaModal';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
 import MantenimientoChoiceModal from '@/components/MantenimientoChoiceModal';
 
-type Tab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'convenios' | 'usuarios';
+type Tab =
+  | 'inventario'
+  | 'mantenimiento'
+  | 'externalizacion'
+  | 'convenios'
+  | 'usuarios'
+  | 'carga_masiva';
 
 class TabErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
   state = { message: null as string | null };
@@ -368,6 +375,18 @@ function AppContent() {
         {tab === 'usuarios' && (
           <TabErrorBoundary>
             <UsuariosView />
+          </TabErrorBoundary>
+        )}
+
+        {tab === 'carga_masiva' && (
+          <TabErrorBoundary>
+            <CargaMasivaView
+              onNavigateToTab={(dest) => setTab(dest)}
+              onDataImported={() => {
+                fetchEquipos();
+                window.dispatchEvent(new Event('mantenimientos_updated'));
+              }}
+            />
           </TabErrorBoundary>
         )}
       </main>

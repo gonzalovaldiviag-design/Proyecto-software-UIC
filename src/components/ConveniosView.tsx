@@ -71,6 +71,11 @@ export default function ConveniosView() {
   const [convenioModalOpen, setConvenioModalOpen] = useState(false);
   const [convenioEditando, setConvenioEditando] = useState<Convenio | null>(null);
 
+  // Modal de confirmación para eliminar convenio
+  const [convenioAEliminar, setConvenioAEliminar] = useState<Convenio | null>(null);
+  const [eliminandoConvenio, setEliminandoConvenio] = useState(false);
+  const [vistaConvenios, setVistaConvenios] = useState<'detalle' | 'tabla'>('detalle');
+
   const [asociarModalOpen, setAsociarModalOpen] = useState(false);
 
   const [desvincularModalOpen, setDesvincularModalOpen] = useState(false);
@@ -99,7 +104,26 @@ export default function ConveniosView() {
       if (resConv.data) setConvenios(resConv.data as Convenio[]);
       if (resCuotas.data) setCuotas(resCuotas.data as ConvenioCuotaMensual[]);
       if (resVinculos.data) setConvenioEquipos(resVinculos.data as ConvenioEquipo[]);
-      if (resEq.data) setEquipos(resEq.data as Equipo[]);
+      if (resEq.data) {
+        let todosEquipos = resEq.data as Equipo[];
+        if (resVinculos.data) {
+          const vinculos = resVinculos.data as ConvenioEquipo[];
+          const idsEnVinculos = new Set(vinculos.map((v) => v.equipo_id));
+          const idsCargados = new Set(todosEquipos.map((e) => e.id));
+          const faltantes = Array.from(idsEnVinculos).filter((id) => !idsCargados.has(id));
+          if (faltantes.length > 0) {
+            try {
+              const { data: eqFaltantes } = await supabase.from('equipos').select('*').in('id', faltantes);
+              if (eqFaltantes) {
+                todosEquipos = [...todosEquipos, ...(eqFaltantes as Equipo[])];
+              }
+            } catch (errF) {
+              console.warn('Error cargando equipos faltantes para convenios:', errF);
+            }
+          }
+        }
+        setEquipos(todosEquipos);
+      }
     } catch (err) {
       console.error('[ConveniosView] Error cargando datos:', err);
     } finally {
@@ -306,6 +330,52 @@ export default function ConveniosView() {
       fetchData();
     } catch (e: unknown) {
       mostrarToast('error', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleAbrirConfirmacionEliminarConvenio = (conv: Convenio) => {
+    setConvenioAEliminar(conv);
+  };
+
+  const handleConfirmarEliminarConvenio = async () => {
+    if (!convenioAEliminar) return;
+    if (!puedeGestionar) {
+      mostrarToast('error', 'No tienes permisos para eliminar convenios.');
+      return;
+    }
+    setEliminandoConvenio(true);
+    try {
+      const convenioId = convenioAEliminar.id;
+      const codigoConvenio = convenioAEliminar.codigo;
+
+      // 1. Eliminar vínculos de equipos del convenio
+      await supabase.from('convenio_equipos').delete().eq('convenio_id', convenioId);
+
+      // 2. Eliminar cuotas mensuales asociadas al convenio
+      await supabase.from('convenio_cuotas_mensuales').delete().eq('convenio_id', convenioId);
+
+      // 3. Eliminar el convenio propiamente tal
+      const { error } = await supabase.from('convenios').delete().eq('id', convenioId);
+      if (error) throw error;
+
+      // 4. Actualización optimista inmediata en los estados reactivos
+      setConvenios((prev) => prev.filter((c) => c.id !== convenioId));
+      setConvenioEquipos((prev) => prev.filter((ce) => ce.convenio_id !== convenioId));
+      setCuotas((prev) => prev.filter((cq) => cq.convenio_id !== convenioId));
+
+      if (convenioSeleccionadoId === convenioId) {
+        const restantes = convenios.filter((c) => c.id !== convenioId);
+        setConvenioSeleccionadoId(restantes.length > 0 ? restantes[0].id : null);
+      }
+
+      setConvenioAEliminar(null);
+      mostrarToast('exito', `Convenio ${codigoConvenio} eliminado exitosamente.`);
+      await fetchData();
+    } catch (err: unknown) {
+      console.error('Error al eliminar convenio:', err);
+      mostrarToast('error', err instanceof Error ? err.message : String(err));
+    } finally {
+      setEliminandoConvenio(false);
     }
   };
 
@@ -906,174 +976,397 @@ export default function ConveniosView() {
           SUB-TAB 2: GESTIÓN DE CONVENIOS Y EQUIPOS AMPARADOS
          ======================================================== */}
       {subTab === 'convenios' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Columna Izquierda: Listado y Selección de Convenios (4 cols) */}
-          <div className="lg:col-span-4 space-y-3">
-            <div className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xs space-y-2.5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={busquedaConvenio}
-                  onChange={(e) => setBusquedaConvenio(e.target.value)}
-                  placeholder="Buscar convenio por código o proveedor..."
-                  className="w-full rounded-xl border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <select
-                  value={filtroTipoConvenio}
-                  onChange={(e) => setFiltroTipoConvenio(e.target.value)}
-                  className="w-1/2 rounded-lg border border-slate-200 bg-slate-50 py-1 px-2 text-[11px] text-slate-700 cursor-pointer"
+        <div className="space-y-4">
+          {/* Barra superior con selector de visualización (Ficha vs Tabla) */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-slate-700">Visualización:</span>
+              <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs font-semibold">
+                <button
+                  type="button"
+                  id="btn-vista-detalle-convenios"
+                  onClick={() => setVistaConvenios('detalle')}
+                  className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                    vistaConvenios === 'detalle'
+                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
                 >
-                  <option value="todos">Tipos: Todos</option>
-                  <option value="Arriendo">Arriendo</option>
-                  <option value="Comodato">Comodato</option>
-                  <option value="Garantía">Garantía</option>
-                  <option value="Mantenimiento">Mantenimiento</option>
-                  <option value="Suministro">Suministro</option>
-                </select>
-
-                <select
-                  value={filtroEstadoConvenio}
-                  onChange={(e) => setFiltroEstadoConvenio(e.target.value)}
-                  className="w-1/2 rounded-lg border border-slate-200 bg-slate-50 py-1 px-2 text-[11px] text-slate-700 cursor-pointer"
+                  Ficha y Equipos Amparados
+                </button>
+                <button
+                  type="button"
+                  id="btn-vista-tabla-convenios"
+                  onClick={() => setVistaConvenios('tabla')}
+                  className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                    vistaConvenios === 'tabla'
+                      ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
                 >
-                  <option value="todos">Estados: Todos</option>
-                  <option value="Vigente">Vigente</option>
-                  <option value="Por Vencer">Por Vencer</option>
-                  <option value="Vencido">Vencido</option>
-                  <option value="Finalizado">Finalizado</option>
-                </select>
+                  Tabla de Convenios
+                </button>
               </div>
             </div>
 
-            {/* Lista de Tarjetas de Convenio */}
-            <div className="space-y-2.5 max-h-[680px] overflow-y-auto pr-0.5">
-              {loading ? (
-                <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  <span>Cargando convenios...</span>
-                </div>
-              ) : conveniosFiltrados.length === 0 ? (
-                <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-400">
-                  No se encontraron convenios.
-                </div>
-              ) : (
-                conveniosFiltrados.map((conv) => {
-                  const seleccionado = conv.id === convenioSeleccionado?.id;
-                  const cantEquipos = convenioEquipos.filter(
-                    (v) => v.convenio_id === conv.id && v.estado_vinculo === 'Activo'
-                  ).length;
-
-                  // Días restantes
-                  const hoy = new Date();
-                  const diasRestantes = conv.fecha_termino
-                    ? Math.ceil((new Date(conv.fecha_termino).getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
-                    : 999;
-                  const porVencer = diasRestantes >= 0 && diasRestantes <= 60;
-
-                  return (
-                    <div
-                      key={conv.id}
-                      onClick={() => setConvenioSeleccionadoId(conv.id)}
-                      className={`rounded-2xl border p-4 cursor-pointer transition shadow-2xs ${
-                        seleccionado
-                          ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-500/20'
-                          : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-xs font-bold text-blue-700">
-                              {conv.codigo}
-                            </span>
-                            <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-semibold text-slate-600">
-                              {conv.tipo_convenio}
-                            </span>
-                          </div>
-                          <h4 className="font-bold text-xs text-slate-900 mt-1 line-clamp-1">
-                            {conv.nombre}
-                          </h4>
-                          <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
-                            <Building2 className="h-3 w-3 text-slate-400" />
-                            <span>{conv.empresa}</span>
-                          </p>
-                        </div>
-
-                        {porVencer && (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-300 flex items-center gap-1 flex-shrink-0 animate-pulse">
-                            <AlertTriangle className="h-3 w-3 text-amber-600" />
-                            <span>{diasRestantes}d</span>
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600 pt-2 border-t border-slate-100">
-                        <span className="font-mono font-bold text-slate-900">
-                          {formatMoneda(conv.monto_total_comprometido)}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-700">
-                          {cantEquipos} equipo(s)
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+            <div className="text-xs text-slate-500">
+              Total convenios: <strong className="text-slate-800">{conveniosFiltrados.length}</strong> de <strong>{convenios.length}</strong>
             </div>
           </div>
 
-          {/* Columna Derecha: Detalle de Convenio y Equipos Amparados (8 cols) */}
-          <div className="lg:col-span-8 space-y-4">
-            {convenioSeleccionado ? (
-              <>
-                {/* Ficha Superior del Convenio Seleccionado */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                          {convenioSeleccionado.codigo}
-                        </span>
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          {convenioSeleccionado.tipo_convenio}
-                        </span>
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-xs font-bold border ${
-                            convenioSeleccionado.estado === 'Vigente'
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                              : convenioSeleccionado.estado === 'Por Vencer'
-                              ? 'bg-amber-50 text-amber-800 border-amber-300'
-                              : 'bg-rose-50 text-rose-800 border-rose-200'
+          {/* VISTA 1: TABLA DE CONVENIOS (CON COLUMNA DE ACCIONES Y PAPELERA) */}
+          {vistaConvenios === 'tabla' && (
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden space-y-3">
+              {/* Filtros de la tabla de convenios */}
+              <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={busquedaConvenio}
+                    onChange={(e) => setBusquedaConvenio(e.target.value)}
+                    placeholder="Buscar convenio por código, nombre o proveedor..."
+                    className="w-full rounded-xl border border-slate-300 bg-white py-2 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <select
+                    value={filtroTipoConvenio}
+                    onChange={(e) => setFiltroTipoConvenio(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white py-2 px-3 text-xs text-slate-700 cursor-pointer shadow-2xs"
+                  >
+                    <option value="todos">Todos los Tipos</option>
+                    <option value="Arriendo">Arriendo</option>
+                    <option value="Comodato">Comodato</option>
+                    <option value="Garantía">Garantía</option>
+                    <option value="Mantenimiento">Mantenimiento</option>
+                    <option value="Suministro">Suministro</option>
+                  </select>
+
+                  <select
+                    value={filtroEstadoConvenio}
+                    onChange={(e) => setFiltroEstadoConvenio(e.target.value)}
+                    className="rounded-xl border border-slate-300 bg-white py-2 px-3 text-xs text-slate-700 cursor-pointer shadow-2xs"
+                  >
+                    <option value="todos">Todos los Estados</option>
+                    <option value="Vigente">Vigente</option>
+                    <option value="Por Vencer">Por Vencer</option>
+                    <option value="Vencido">Vencido</option>
+                    <option value="Finalizado">Finalizado</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap min-w-[1000px]">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                      <th className="px-4 py-3.5">CÓDIGO</th>
+                      <th className="px-4 py-3.5">TIPO</th>
+                      <th className="px-4 py-3.5">NOMBRE / OBJETO</th>
+                      <th className="px-4 py-3.5">PROVEEDOR</th>
+                      <th className="px-4 py-3.5">VIGENCIA</th>
+                      <th className="px-4 py-3.5">PRESUPUESTO COMPROMETIDO</th>
+                      <th className="px-4 py-3.5">ESTADO</th>
+                      <th className="px-4 py-3.5">EQUIPOS</th>
+                      <th className="px-4 py-3.5 text-center sticky right-0 bg-slate-50 shadow-l">ACCIONES</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {conveniosFiltrados.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="px-5 py-12 text-center text-slate-400">
+                          No se encontraron convenios registrados coincidentes con los filtros.
+                        </td>
+                      </tr>
+                    ) : (
+                      conveniosFiltrados.map((conv) => {
+                        const cantEq = convenioEquipos.filter(
+                          (v) => v.convenio_id === conv.id && v.estado_vinculo === 'Activo'
+                        ).length;
+
+                        return (
+                          <tr key={conv.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="px-4 py-3.5 font-mono font-bold text-blue-700">
+                              {conv.codigo}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                {conv.tipo_convenio}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 font-bold text-slate-900 max-w-[260px] truncate" title={conv.nombre}>
+                              {conv.nombre}
+                            </td>
+                            <td className="px-4 py-3.5 text-slate-700">
+                              {conv.empresa}
+                            </td>
+                            <td className="px-4 py-3.5 text-slate-600 font-mono text-[11px]">
+                              {conv.fecha_inicio} al {conv.fecha_termino}
+                            </td>
+                            <td className="px-4 py-3.5 font-mono font-bold text-slate-900">
+                              {formatMoneda(conv.monto_total_comprometido)}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`rounded-md px-2 py-0.5 text-[11px] font-bold border ${
+                                  conv.estado === 'Vigente'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : conv.estado === 'Por Vencer'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                                }`}
+                              >
+                                {conv.estado}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                                {cantEq} equipo(s)
+                              </span>
+                            </td>
+                            {/* COLUMNA DE ACCIONES */}
+                            <td className="px-4 py-3.5 text-center sticky right-0 bg-white shadow-l">
+                              {puedeGestionar ? (
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setConvenioEditando(conv);
+                                      setConvenioModalOpen(true);
+                                    }}
+                                    className="rounded-lg p-1.5 text-slate-500 hover:bg-blue-50 hover:text-blue-700 transition cursor-pointer"
+                                    title={`Editar convenio ${conv.codigo}`}
+                                  >
+                                    <Edit2 className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    id={`btn-eliminar-convenio-tabla-${conv.codigo}`}
+                                    onClick={() => handleAbrirConfirmacionEliminarConvenio(conv)}
+                                    className="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition cursor-pointer"
+                                    title={`Eliminar convenio ${conv.codigo}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 italic">Solo lectura</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* VISTA 2: FICHA Y EQUIPOS AMPARADOS (SPLIT VIEW) */}
+          {vistaConvenios === 'detalle' && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Columna Izquierda: Listado y Selección de Convenios (4 cols) */}
+              <div className="lg:col-span-4 space-y-3">
+                <div className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xs space-y-2.5">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={busquedaConvenio}
+                      onChange={(e) => setBusquedaConvenio(e.target.value)}
+                      placeholder="Buscar convenio por código o proveedor..."
+                      className="w-full rounded-xl border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={filtroTipoConvenio}
+                      onChange={(e) => setFiltroTipoConvenio(e.target.value)}
+                      className="w-1/2 rounded-lg border border-slate-200 bg-slate-50 py-1 px-2 text-[11px] text-slate-700 cursor-pointer"
+                    >
+                      <option value="todos">Tipos: Todos</option>
+                      <option value="Arriendo">Arriendo</option>
+                      <option value="Comodato">Comodato</option>
+                      <option value="Garantía">Garantía</option>
+                      <option value="Mantenimiento">Mantenimiento</option>
+                      <option value="Suministro">Suministro</option>
+                    </select>
+
+                    <select
+                      value={filtroEstadoConvenio}
+                      onChange={(e) => setFiltroEstadoConvenio(e.target.value)}
+                      className="w-1/2 rounded-lg border border-slate-200 bg-slate-50 py-1 px-2 text-[11px] text-slate-700 cursor-pointer"
+                    >
+                      <option value="todos">Estados: Todos</option>
+                      <option value="Vigente">Vigente</option>
+                      <option value="Por Vencer">Por Vencer</option>
+                      <option value="Vencido">Vencido</option>
+                      <option value="Finalizado">Finalizado</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Lista de Tarjetas de Convenio */}
+                <div className="space-y-2.5 max-h-[680px] overflow-y-auto pr-0.5">
+                  {loading ? (
+                    <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                      <span>Cargando convenios...</span>
+                    </div>
+                  ) : conveniosFiltrados.length === 0 ? (
+                    <div className="rounded-xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-400">
+                      No se encontraron convenios.
+                    </div>
+                  ) : (
+                    conveniosFiltrados.map((conv) => {
+                      const seleccionado = conv.id === convenioSeleccionado?.id;
+                      const cantEquipos = convenioEquipos.filter(
+                        (v) => v.convenio_id === conv.id && v.estado_vinculo === 'Activo'
+                      ).length;
+
+                      // Días restantes
+                      const hoy = new Date();
+                      const diasRestantes = conv.fecha_termino
+                        ? Math.ceil((new Date(conv.fecha_termino).getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
+                        : 999;
+                      const porVencer = diasRestantes >= 0 && diasRestantes <= 60;
+
+                      return (
+                        <div
+                          key={conv.id}
+                          onClick={() => setConvenioSeleccionadoId(conv.id)}
+                          className={`rounded-2xl border p-4 cursor-pointer transition shadow-2xs ${
+                            seleccionado
+                              ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-500/20'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
                           }`}
                         >
-                          {convenioSeleccionado.estado}
-                        </span>
-                      </div>
-                      <h3 className="text-base font-bold text-slate-900 mt-1">
-                        {convenioSeleccionado.nombre}
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Proveedor: <strong className="text-slate-700">{convenioSeleccionado.empresa}</strong>
-                        {convenioSeleccionado.rut_empresa ? ` (RUT: ${convenioSeleccionado.rut_empresa})` : ''}
-                      </p>
-                    </div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-xs font-bold text-blue-700">
+                                  {conv.codigo}
+                                </span>
+                                <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-semibold text-slate-600">
+                                  {conv.tipo_convenio}
+                                </span>
+                              </div>
+                              <h4 className="font-bold text-xs text-slate-900 mt-1 line-clamp-1">
+                                {conv.nombre}
+                              </h4>
+                              <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
+                                <Building2 className="h-3 w-3 text-slate-400" />
+                                <span>{conv.empresa}</span>
+                              </p>
+                            </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setConvenioEditando(convenioSeleccionado);
-                        setConvenioModalOpen(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
-                    >
-                      <Edit2 className="h-3.5 w-3.5 text-blue-600" />
-                      <span>Editar Convenio</span>
-                    </button>
-                  </div>
+                            {/* Alerta y Botón de Papelera */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {porVencer && (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-300 flex items-center gap-1 animate-pulse">
+                                  <AlertTriangle className="h-3 w-3 text-amber-600" />
+                                  <span>{diasRestantes}d</span>
+                                </span>
+                              )}
+                              {puedeGestionar && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAbrirConfirmacionEliminarConvenio(conv);
+                                  }}
+                                  className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition cursor-pointer"
+                                  title={`Eliminar convenio ${conv.codigo}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-between text-[11px] text-slate-600 pt-2 border-t border-slate-100">
+                            <span className="font-mono font-bold text-slate-900">
+                              {formatMoneda(conv.monto_total_comprometido)}
+                            </span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-700">
+                              {cantEquipos} equipo(s)
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Columna Derecha: Detalle de Convenio y Equipos Amparados (8 cols) */}
+              <div className="lg:col-span-8 space-y-4">
+                {convenioSeleccionado ? (
+                  <>
+                    {/* Ficha Superior del Convenio Seleccionado */}
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                              {convenioSeleccionado.codigo}
+                            </span>
+                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                              {convenioSeleccionado.tipo_convenio}
+                            </span>
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-xs font-bold border ${
+                                convenioSeleccionado.estado === 'Vigente'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : convenioSeleccionado.estado === 'Por Vencer'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                  : 'bg-rose-50 text-rose-800 border-rose-200'
+                              }`}
+                            >
+                              {convenioSeleccionado.estado}
+                            </span>
+                          </div>
+                          <h3 className="text-base font-bold text-slate-900 mt-1">
+                            {convenioSeleccionado.nombre}
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Proveedor: <strong className="text-slate-700">{convenioSeleccionado.empresa}</strong>
+                            {convenioSeleccionado.rut_empresa ? ` (RUT: ${convenioSeleccionado.rut_empresa})` : ''}
+                          </p>
+                        </div>
+
+                        {/* Botones de acción del convenio */}
+                        {puedeGestionar && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConvenioEditando(convenioSeleccionado);
+                                setConvenioModalOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+                            >
+                              <Edit2 className="h-3.5 w-3.5 text-blue-600" />
+                              <span>Editar Convenio</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              id="btn-eliminar-convenio-detalle"
+                              onClick={() => handleAbrirConfirmacionEliminarConvenio(convenioSeleccionado)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition cursor-pointer"
+                              title={`Eliminar convenio ${convenioSeleccionado.codigo}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                              <span>Eliminar Convenio</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
 
                   {/* Datos Clave */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-100 text-xs">
@@ -1242,6 +1535,8 @@ export default function ConveniosView() {
           </div>
         </div>
       )}
+    </div>
+  )}
 
       {/* Modal para Crear / Editar Cuota */}
       <CuotaModal
@@ -1298,6 +1593,109 @@ export default function ConveniosView() {
             fetchData();
           }}
         />
+      )}
+
+      {/* Modal de Confirmación para Eliminar Convenio */}
+      {convenioAEliminar && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-eliminar-convenio-titulo"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl ring-1 ring-slate-900/10 animate-in zoom-in-95 duration-200">
+            <button
+              type="button"
+              onClick={() => {
+                if (!eliminandoConvenio) setConvenioAEliminar(null);
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 rounded-lg p-1 transition cursor-pointer"
+              disabled={eliminandoConvenio}
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-rose-100 text-rose-600 ring-8 ring-rose-50">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3
+                  id="modal-eliminar-convenio-titulo"
+                  className="text-base font-bold text-slate-900"
+                >
+                  ¿Eliminar este Convenio?
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 leading-relaxed">
+                  Esta acción eliminará el registro del convenio del sistema y recalculará inmediatamente los indicadores de deuda y auditoría.
+                </p>
+
+                <div className="mt-4 rounded-xl border border-rose-100 bg-rose-50/60 p-3.5 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Código Convenio:</span>
+                    <span className="font-mono font-bold text-rose-950 bg-rose-100 px-2 py-0.5 rounded">
+                      {convenioAEliminar.codigo}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Tipo:</span>
+                    <span className="font-semibold text-slate-800">
+                      {convenioAEliminar.tipo_convenio}
+                    </span>
+                  </div>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-slate-500">Nombre / Objeto:</span>
+                    <span className="font-semibold text-slate-800 text-right line-clamp-1 max-w-[220px]">
+                      {convenioAEliminar.nombre}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Proveedor:</span>
+                    <span className="font-semibold text-slate-800">
+                      {convenioAEliminar.empresa}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1.5 border-t border-rose-200/60">
+                    <span className="text-slate-600 font-medium">Presupuesto Comprometido:</span>
+                    <span className="font-mono font-extrabold text-slate-900">
+                      {formatMoneda(convenioAEliminar.monto_total_comprometido)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setConvenioAEliminar(null)}
+                    disabled={eliminandoConvenio}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-confirmar-eliminar-convenio-modal"
+                    onClick={handleConfirmarEliminarConvenio}
+                    disabled={eliminandoConvenio}
+                    className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-rose-700 transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    {eliminandoConvenio ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Eliminando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4" />
+                        <span>Sí, Eliminar Convenio</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
