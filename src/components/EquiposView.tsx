@@ -22,6 +22,9 @@ import {
 import {
   type Equipo,
   type EstadoEquipo,
+  type Convenio,
+  type ConvenioEquipo,
+  supabase,
 } from '@/lib/supabase';
 import Dashboard from '@/components/Dashboard';
 import EstadoBadge from '@/components/EstadoBadge';
@@ -102,6 +105,7 @@ export default function EquiposView({
     modelo: string;
     serie: string;
     estado: string;
+    condicion_contractual: string;
   }>({
     codigo: '',
     ubicacion: '',
@@ -110,7 +114,34 @@ export default function EquiposView({
     modelo: '',
     serie: '',
     estado: '',
+    condicion_contractual: '',
   });
+
+  // Convenios vinculados para determinar la Condición Contractual
+  const [convenios, setConvenios] = useState<Convenio[]>([]);
+  const [convenioEquipos, setConvenioEquipos] = useState<ConvenioEquipo[]>([]);
+
+  useEffect(() => {
+    let activo = true;
+    async function cargarConvenios() {
+      try {
+        const [resC, resV] = await Promise.all([
+          supabase.from('convenios').select('*'),
+          supabase.from('convenio_equipos').select('*'),
+        ]);
+        if (activo) {
+          if (resC.data) setConvenios(resC.data as Convenio[]);
+          if (resV.data) setConvenioEquipos(resV.data as ConvenioEquipo[]);
+        }
+      } catch (e) {
+        console.error('Error cargando convenios en EquiposView:', e);
+      }
+    }
+    cargarConvenios();
+    return () => {
+      activo = false;
+    };
+  }, []);
 
   const [sortConfig, setSortConfig] = useState<ColumnSortState | null>(null);
 
@@ -191,6 +222,133 @@ export default function EquiposView({
   const listaEstadosEquipo = useMemo(() => {
     return ['Operativo', 'Mantenimiento', 'Dado de baja'];
   }, []);
+
+  // Mapa de condición contractual por ID de equipo según convenios activos
+  const condicionContractualMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        tipo: 'garantia' | 'vigente' | 'por_vencer' | 'sin_convenio' | 'vencido';
+        label: string;
+        badgeClass: string;
+        dotClass: string;
+        convenioCodigo?: string;
+        convenioNombre?: string;
+        empresa?: string;
+        diasRestantes?: number;
+      }
+    >();
+
+    const hoy = new Date();
+
+    equiposBase.forEach((eq) => {
+      // Buscar si el equipo tiene un vínculo activo en convenio_equipos
+      const vinculo = convenioEquipos.find(
+        (v) => v.equipo_id === eq.id && v.estado_vinculo === 'Activo'
+      );
+
+      if (!vinculo) {
+        map.set(eq.id, {
+          tipo: 'sin_convenio',
+          label: 'Sin Convenio / Vencido',
+          badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-400/20',
+          dotClass: 'bg-slate-400',
+        });
+        return;
+      }
+
+      const conv = convenios.find((c) => c.id === vinculo.convenio_id);
+      if (!conv) {
+        map.set(eq.id, {
+          tipo: 'sin_convenio',
+          label: 'Sin Convenio / Vencido',
+          badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-400/20',
+          dotClass: 'bg-slate-400',
+        });
+        return;
+      }
+
+      // Calcular días restantes de vigencia
+      let diasRestantes = 999;
+      if (conv.fecha_termino) {
+        const fTerm = new Date(conv.fecha_termino);
+        diasRestantes = Math.ceil((fTerm.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+      }
+
+      // Si el convenio expiró en fecha o está marcado como Vencido / Finalizado
+      if (diasRestantes < 0 || conv.estado === 'Vencido' || conv.estado === 'Finalizado') {
+        map.set(eq.id, {
+          tipo: 'vencido',
+          label: 'Sin Convenio / Vencido',
+          badgeClass: 'bg-rose-50 text-rose-700 border-rose-300 ring-rose-500/20',
+          dotClass: 'bg-rose-500',
+          convenioCodigo: conv.codigo,
+          convenioNombre: conv.nombre,
+          empresa: conv.empresa,
+          diasRestantes,
+        });
+        return;
+      }
+
+      // 1. Verde: "En Garantía" (si el convenio es de tipo garantía y está dentro de vigencia)
+      if (conv.tipo_convenio === 'Garantía') {
+        map.set(eq.id, {
+          tipo: 'garantia',
+          label: 'En Garantía',
+          badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-300 ring-emerald-500/20 font-bold',
+          dotClass: 'bg-emerald-500',
+          convenioCodigo: conv.codigo,
+          convenioNombre: conv.nombre,
+          empresa: conv.empresa,
+          diasRestantes,
+        });
+        return;
+      }
+
+      // 2. Ámbar: "Comodato por Vencer" (si faltan menos de 60 días para la fecha de término)
+      if (diasRestantes >= 0 && diasRestantes <= 60) {
+        const label =
+          conv.tipo_convenio === 'Comodato'
+            ? 'Comodato por Vencer'
+            : conv.tipo_convenio === 'Arriendo'
+            ? 'Arriendo por Vencer'
+            : `${conv.tipo_convenio} por Vencer`;
+
+        map.set(eq.id, {
+          tipo: 'por_vencer',
+          label,
+          badgeClass: 'bg-amber-50 text-amber-800 border-amber-300 ring-amber-500/20 font-bold',
+          dotClass: 'bg-amber-500 animate-pulse',
+          convenioCodigo: conv.codigo,
+          convenioNombre: conv.nombre,
+          empresa: conv.empresa,
+          diasRestantes,
+        });
+        return;
+      }
+
+      // 3. Azul: "Comodato Vigente" / "Arriendo Vigente"
+      const label =
+        conv.tipo_convenio === 'Comodato'
+          ? 'Comodato Vigente'
+          : conv.tipo_convenio === 'Arriendo'
+          ? 'Arriendo Vigente'
+          : `${conv.tipo_convenio} Vigente`;
+
+      map.set(eq.id, {
+        tipo: 'vigente',
+        label,
+        badgeClass: 'bg-blue-50 text-blue-700 border-blue-200 ring-blue-500/20 font-medium',
+        dotClass: 'bg-blue-500',
+        convenioCodigo: conv.codigo,
+        convenioNombre: conv.nombre,
+        empresa: conv.empresa,
+        diasRestantes,
+      });
+    });
+
+    return map;
+  }, [equiposBase, convenioEquipos, convenios]);
 
   // Manejo de clicks y escape para menú de acciones
   useEffect(() => {
@@ -393,6 +551,15 @@ export default function EquiposView({
         const est = colFilters.estado.trim().toLowerCase();
         if (!eq.estado || eq.estado.toLowerCase() !== est) return false;
       }
+      if (
+        colFilters.condicion_contractual.trim() &&
+        colFilters.condicion_contractual.toLowerCase() !== 'todos'
+      ) {
+        const cond = condicionContractualMap.get(eq.id);
+        const condLabel = cond ? cond.label.toLowerCase() : 'sin convenio / vencido';
+        const target = colFilters.condicion_contractual.trim().toLowerCase();
+        if (!condLabel.includes(target) && target !== condLabel) return false;
+      }
 
       return true;
     });
@@ -433,6 +600,10 @@ export default function EquiposView({
             valA = a.estado || '';
             valB = b.estado || '';
             break;
+          case 'condicion_contractual':
+            valA = condicionContractualMap.get(a.id)?.label || '';
+            valB = condicionContractualMap.get(b.id)?.label || '';
+            break;
           default:
             return 0;
         }
@@ -453,6 +624,7 @@ export default function EquiposView({
     filtroSoloConSerie,
     colFilters,
     sortConfig,
+    condicionContractualMap,
   ]);
 
   const total = equiposBase.length;
@@ -503,6 +675,7 @@ export default function EquiposView({
       modelo: '',
       serie: '',
       estado: '',
+      condicion_contractual: '',
     });
     setSortConfig(null);
   };
@@ -538,6 +711,20 @@ export default function EquiposView({
       {
         header: 'Estado Operativo',
         accessor: (eq) => eq.estado || '—',
+      },
+      {
+        header: 'Condición Contractual',
+        accessor: (eq) => {
+          const cond = condicionContractualMap.get(eq.id);
+          return cond ? cond.label : 'Sin Convenio / Vencido';
+        },
+      },
+      {
+        header: 'Convenio Asociado',
+        accessor: (eq) => {
+          const cond = condicionContractualMap.get(eq.id);
+          return cond?.convenioCodigo ? `${cond.convenioCodigo}: ${cond.convenioNombre}` : '—';
+        },
       },
       {
         header: 'Criticidad',
@@ -1144,12 +1331,30 @@ export default function EquiposView({
                   selectOptions={listaEstadosEquipo}
                   className="min-w-[140px]"
                 />
+                <TableColumnHeader
+                  id="th-equipos-condicion"
+                  title="Condición Contractual"
+                  sortKey="condicion_contractual"
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterType="select"
+                  filterValue={colFilters.condicion_contractual}
+                  onFilterChange={(v) => handleColumnFilterChange('condicion_contractual', v)}
+                  selectOptions={[
+                    'En Garantía',
+                    'Comodato Vigente',
+                    'Arriendo Vigente',
+                    'Comodato por Vencer',
+                    'Sin Convenio / Vencido',
+                  ]}
+                  className="min-w-[180px]"
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading && (
                 <tr>
-                  <td colSpan={7} className="px-5 py-16">
+                  <td colSpan={8} className="px-5 py-16">
                     <div className="flex items-center justify-center gap-2 text-slate-400">
                       <Loader2 className="h-5 w-5 animate-spin" />
                       <span className="text-sm">Cargando equipos...</span>
@@ -1159,7 +1364,7 @@ export default function EquiposView({
               )}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-5 py-16">
+                  <td colSpan={8} className="px-5 py-16">
                     <div className="flex flex-col items-center justify-center gap-2 text-slate-400">
                       <Boxes className="h-10 w-10" />
                       <p className="text-sm font-medium text-slate-500">
@@ -1219,6 +1424,33 @@ export default function EquiposView({
                     </td>
                     <td className="px-5 py-4">
                       <EstadoBadge estado={eq.estado} />
+                    </td>
+                    <td className="px-5 py-4 whitespace-nowrap">
+                      {(() => {
+                        const cond = condicionContractualMap.get(eq.id) || {
+                          tipo: 'sin_convenio',
+                          label: 'Sin Convenio / Vencido',
+                          badgeClass: 'bg-slate-100 text-slate-600 border-slate-200 ring-slate-400/20',
+                          dotClass: 'bg-slate-400',
+                        };
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ring-1 ${cond.badgeClass}`}
+                            title={
+                              cond.convenioCodigo
+                                ? `${cond.convenioCodigo}: ${cond.convenioNombre}${
+                                    cond.diasRestantes !== undefined
+                                      ? ` (${cond.diasRestantes} días restantes)`
+                                      : ''
+                                  }`
+                                : 'Sin convenio activo asociado'
+                            }
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${cond.dotClass}`} />
+                            {cond.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}

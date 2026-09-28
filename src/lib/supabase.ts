@@ -193,8 +193,81 @@ export interface PermisosUsuario {
   crear_solicitud_compra: boolean;
   exportar_compras: boolean;
 
+  // Convenios y Pagos
+  ver_convenios?: boolean;
+  gestionar_convenios?: boolean;
+
   // Administración y Usuarios
   gestionar_usuarios: boolean;
+}
+
+export type TipoConvenio = 'Garantía' | 'Comodato' | 'Arriendo' | 'Mantenimiento' | 'Suministro';
+export type EstadoConvenio = 'Vigente' | 'Por Vencer' | 'Vencido' | 'Finalizado' | 'En Tramitación';
+
+export interface Convenio {
+  id: string;
+  codigo: string;
+  nombre: string;
+  empresa: string;
+  rut_empresa?: string | null;
+  tipo_convenio: TipoConvenio;
+  fecha_inicio: string;
+  fecha_termino: string;
+  monto_total_comprometido: number;
+  moneda: 'CLP' | 'UF';
+  valor_uf?: number | null;
+  orden_compra_madre?: string | null;
+  licitacion_id?: string | null;
+  estado: EstadoConvenio;
+  responsable?: string | null;
+  descripcion?: string | null;
+  created_at: string;
+}
+
+export type EstadoVinculoEquipo = 'Activo' | 'Desvinculado';
+
+export interface ConvenioEquipo {
+  id: string;
+  convenio_id: string;
+  equipo_id: string;
+  fecha_incorporacion: string;
+  fecha_salida?: string | null;
+  motivo_salida?: string | null;
+  estado_vinculo: EstadoVinculoEquipo;
+  observaciones?: string | null;
+  created_at: string;
+}
+
+export interface ConvenioCuotaMensual {
+  id: string;
+  convenio_id: string;
+  estado_uic: string;
+  numero_guia: string;
+  fecha_guia: string;
+  codigo_mi_ssvq: string;
+  fecha_entrega_abastecimiento: string;
+  empresa: string;
+  equipo_servicio: string;
+  orden_compra: string;
+  fecha_oc: string;
+  mes: string;
+  anio: number;
+  cuota: string;
+  valor_clp: number;
+  estado_mercado_publico: string;
+  numero_factura: string;
+  fecha_factura: string;
+  observaciones?: string | null;
+  created_at: string;
+}
+
+export interface VistaAuditoriaConvenios {
+  total_presupuesto_comprometido_clp: number;
+  total_presupuesto_comprometido_uf: number;
+  monto_ejecutado_clp: number;
+  saldo_deuda_clp: number;
+  convenios_por_vencer_count: number;
+  cuotas_traba_administrativa_count: number;
 }
 
 export interface PerfilUsuario {
@@ -800,6 +873,411 @@ export const INITIAL_NOTIFICACIONES: Notificacion[] = [
   },
 ];
 
+export const INITIAL_CONVENIOS: Convenio[] = [
+  {
+    id: '55555555-5555-4555-8555-555555555501',
+    codigo: 'CONV-2025-001',
+    nombre: 'Arriendo Integral de Monitores Multiparamétricos y Bombas de Infusión',
+    empresa: 'Philips Chilena S.A.',
+    rut_empresa: '96.541.230-8',
+    tipo_convenio: 'Arriendo',
+    fecha_inicio: '2025-01-01',
+    fecha_termino: '2026-12-31',
+    monto_total_comprometido: 48000000,
+    moneda: 'CLP',
+    valor_uf: 1250,
+    orden_compra_madre: '2398-102-LR25',
+    licitacion_id: '2398-45-LP24',
+    estado: 'Vigente',
+    responsable: 'Ing. Pamela Soto',
+    descripcion: 'Contrato de arriendo con mantención preventiva trimestral y soporte técnico especializado.',
+    created_at: '2025-01-01T08:00:00.000Z',
+  },
+  {
+    id: '55555555-5555-4555-8555-555555555502',
+    codigo: 'CONV-2025-002',
+    nombre: 'Comodato de Equipos de Ultrasonido y Diagnóstico Portátil',
+    empresa: 'Sonosite Medical Chile SpA',
+    rut_empresa: '76.890.112-K',
+    tipo_convenio: 'Comodato',
+    fecha_inicio: '2025-10-15',
+    fecha_termino: '2026-10-30',
+    monto_total_comprometido: 18500000,
+    moneda: 'CLP',
+    valor_uf: 480,
+    orden_compra_madre: '2398-330-CM25',
+    licitacion_id: '2398-12-LE25',
+    estado: 'Por Vencer',
+    responsable: 'Ing. Carlos Mendoza',
+    descripcion: 'Comodato de ecografía en Maternidad. Requiere renovación o restitución en menos de 60 días.',
+    created_at: '2025-10-15T09:00:00.000Z',
+  },
+  {
+    id: '55555555-5555-4555-8555-555555555503',
+    codigo: 'CONV-2026-003',
+    nombre: 'Garantía Técnica y Mantención Equipos de Desfibrilación',
+    empresa: 'Zoll Medical de Chile',
+    rut_empresa: '77.210.450-4',
+    tipo_convenio: 'Garantía',
+    fecha_inicio: '2026-01-01',
+    fecha_termino: '2027-01-01',
+    monto_total_comprometido: 9600000,
+    moneda: 'CLP',
+    valor_uf: 250,
+    orden_compra_madre: '2398-012-CM26',
+    licitacion_id: '2398-02-LR26',
+    estado: 'Vigente',
+    responsable: 'Téc. Fernando Ruiz',
+    descripcion: 'Garantía extendida de fabricante con reemplazo de palas y calibración semestral.',
+    created_at: '2026-01-01T10:00:00.000Z',
+  },
+  {
+    id: '55555555-5555-4555-8555-555555555504',
+    codigo: 'CONV-2024-004',
+    nombre: 'Arriendo Operativo de Centrífugas de Laboratorio Clínico',
+    empresa: 'Eppendorf Chile Ltda.',
+    rut_empresa: '76.123.456-7',
+    tipo_convenio: 'Arriendo',
+    fecha_inicio: '2024-06-01',
+    fecha_termino: '2027-06-30',
+    monto_total_comprometido: 14400000,
+    moneda: 'CLP',
+    valor_uf: 375,
+    orden_compra_madre: '2398-140-CM24',
+    licitacion_id: '2398-88-LP23',
+    estado: 'Vigente',
+    responsable: 'Ing. Pamela Soto',
+    descripcion: 'Arriendo de centrífuga con servicio preventivo y mantención de rotores incluidos.',
+    created_at: '2024-06-01T11:00:00.000Z',
+  },
+];
+
+export const INITIAL_CONVENIO_EQUIPOS: ConvenioEquipo[] = [
+  {
+    id: '66666666-6666-4666-8666-666666666601',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    equipo_id: '11111111-1111-4111-8111-111111111101',
+    fecha_incorporacion: '2025-01-01',
+    estado_vinculo: 'Activo',
+    observaciones: 'Equipo Monitor Philips asignado a UCI - Sala 3.',
+    created_at: '2025-01-01T08:30:00.000Z',
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666602',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    equipo_id: '11111111-1111-4111-8111-111111111103',
+    fecha_incorporacion: '2025-01-01',
+    estado_vinculo: 'Activo',
+    observaciones: 'Bomba de Infusión amparada en Pabellón Quirúrgico.',
+    created_at: '2025-01-01T08:30:00.000Z',
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666603',
+    convenio_id: '55555555-5555-4555-8555-555555555502',
+    equipo_id: '11111111-1111-4111-8111-111111111106',
+    fecha_incorporacion: '2025-10-15',
+    estado_vinculo: 'Activo',
+    observaciones: 'Ecógrafo Portátil en Maternidad. Alerta: Comodato por Vencer (< 60 días).',
+    created_at: '2025-10-15T09:30:00.000Z',
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666604',
+    convenio_id: '55555555-5555-4555-8555-555555555503',
+    equipo_id: '11111111-1111-4111-8111-111111111105',
+    fecha_incorporacion: '2026-01-01',
+    estado_vinculo: 'Activo',
+    observaciones: 'Desfibrilador en Emergencias amparado por Garantía Vigente.',
+    created_at: '2026-01-01T10:30:00.000Z',
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666605',
+    convenio_id: '55555555-5555-4555-8555-555555555504',
+    equipo_id: '11111111-1111-4111-8111-111111111110',
+    fecha_incorporacion: '2024-06-01',
+    estado_vinculo: 'Activo',
+    observaciones: 'Centrífuga en Laboratorio con arriendo operativo vigente.',
+    created_at: '2024-06-01T11:30:00.000Z',
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666606',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    equipo_id: '11111111-1111-4111-8111-111111111102',
+    fecha_incorporacion: '2025-01-01',
+    fecha_salida: '2026-02-28',
+    motivo_salida: 'Traspaso a nueva licitación de ventilación mecánica especializada',
+    estado_vinculo: 'Desvinculado',
+    observaciones: 'Desvinculado conforme según acta de entrega.',
+    created_at: '2025-01-01T08:30:00.000Z',
+  },
+];
+
+export const INITIAL_CONVENIO_CUOTAS: ConvenioCuotaMensual[] = [
+  {
+    id: '77777777-7777-4777-8777-777777777701',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10221',
+    fecha_guia: '2026-01-08',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-001',
+    fecha_entrega_abastecimiento: '2026-01-12',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-01-15',
+    mes: 'Enero',
+    anio: 2026,
+    cuota: '1/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-91201',
+    fecha_factura: '2026-01-18',
+    observaciones: 'Pago conforme y procesado en Tesorería.',
+    created_at: '2026-01-18T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777702',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10340',
+    fecha_guia: '2026-02-06',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-022',
+    fecha_entrega_abastecimiento: '2026-02-10',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-02-14',
+    mes: 'Febrero',
+    anio: 2026,
+    cuota: '2/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-91605',
+    fecha_factura: '2026-02-18',
+    observaciones: 'Recepción conforme en Abastecimiento.',
+    created_at: '2026-02-18T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777703',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10499',
+    fecha_guia: '2026-03-05',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-045',
+    fecha_entrega_abastecimiento: '2026-03-09',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-03-12',
+    mes: 'Marzo',
+    anio: 2026,
+    cuota: '3/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-92012',
+    fecha_factura: '2026-03-15',
+    observaciones: 'Cuota marzo visada por UIC.',
+    created_at: '2026-03-15T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777704',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10611',
+    fecha_guia: '2026-04-07',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-071',
+    fecha_entrega_abastecimiento: '2026-04-10',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-04-14',
+    mes: 'Abril',
+    anio: 2026,
+    cuota: '4/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-92430',
+    fecha_factura: '2026-04-18',
+    observaciones: 'Devengado y enviado a pago.',
+    created_at: '2026-04-18T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777705',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10702',
+    fecha_guia: '2026-05-06',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-098',
+    fecha_entrega_abastecimiento: '2026-05-11',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-05-15',
+    mes: 'Mayo',
+    anio: 2026,
+    cuota: '5/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-92890',
+    fecha_factura: '2026-05-20',
+    observaciones: 'Pago realizado.',
+    created_at: '2026-05-20T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777706',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10815',
+    fecha_guia: '2026-06-08',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-115',
+    fecha_entrega_abastecimiento: '2026-06-12',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-06-16',
+    mes: 'Junio',
+    anio: 2026,
+    cuota: '6/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-93310',
+    fecha_factura: '2026-06-20',
+    observaciones: 'Conformidad técnica y administrativa aprobada.',
+    created_at: '2026-06-20T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777707',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-10940',
+    fecha_guia: '2026-07-07',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-140',
+    fecha_entrega_abastecimiento: '2026-07-10',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-07-15',
+    mes: 'Julio',
+    anio: 2026,
+    cuota: '7/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-93780',
+    fecha_factura: '2026-07-19',
+    observaciones: 'Pago emitido.',
+    created_at: '2026-07-19T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777708',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-11052',
+    fecha_guia: '2026-08-05',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-165',
+    fecha_entrega_abastecimiento: '2026-08-10',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '2398-102-LR25',
+    fecha_oc: '2026-08-14',
+    mes: 'Agosto',
+    anio: 2026,
+    cuota: '8/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-94215',
+    fecha_factura: '2026-08-18',
+    observaciones: 'Pago conforme en Abastecimiento.',
+    created_at: '2026-08-18T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777709',
+    convenio_id: '55555555-5555-4555-8555-555555555501',
+    estado_uic: 'Pendiente de OC',
+    numero_guia: 'G-11204',
+    fecha_guia: '2026-09-05',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-192',
+    fecha_entrega_abastecimiento: '2026-09-08',
+    empresa: 'Philips Chilena S.A.',
+    equipo_servicio: 'Monitores UCI - Sala 3',
+    orden_compra: '',
+    fecha_oc: '',
+    mes: 'Septiembre',
+    anio: 2026,
+    cuota: '9/12',
+    valor_clp: 4000000,
+    estado_mercado_publico: 'Pendiente OC',
+    numero_factura: 'F-94801',
+    fecha_factura: '2026-09-12',
+    observaciones: 'Traba administrativa: Guía emitida y recepcionada, pero Abastecimiento aún no genera OC mensual.',
+    created_at: '2026-09-12T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777710',
+    convenio_id: '55555555-5555-4555-8555-555555555502',
+    estado_uic: 'Sin presupuesto',
+    numero_guia: 'G-11218',
+    fecha_guia: '2026-09-10',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-199',
+    fecha_entrega_abastecimiento: '2026-09-14',
+    empresa: 'Sonosite Medical Chile SpA',
+    equipo_servicio: 'Ecografía Portátil Maternidad',
+    orden_compra: '',
+    fecha_oc: '',
+    mes: 'Septiembre',
+    anio: 2026,
+    cuota: '11/12',
+    valor_clp: 1541666,
+    estado_mercado_publico: 'Observada / Sin Saldo',
+    numero_factura: 'F-55019',
+    fecha_factura: '2026-09-15',
+    observaciones: 'Traba administrativa: Alerta de falta de suplementación presupuestaria en ítem 22 para cierre de comodato.',
+    created_at: '2026-09-15T11:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777711',
+    convenio_id: '55555555-5555-4555-8555-555555555503',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-11088',
+    fecha_guia: '2026-08-12',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-170',
+    fecha_entrega_abastecimiento: '2026-08-15',
+    empresa: 'Zoll Medical de Chile',
+    equipo_servicio: 'Desfibriladores Emergencias',
+    orden_compra: '2398-012-CM26',
+    fecha_oc: '2026-08-18',
+    mes: 'Agosto',
+    anio: 2026,
+    cuota: '8/12',
+    valor_clp: 800000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-8812',
+    fecha_factura: '2026-08-20',
+    observaciones: 'Mantención preventiva y garantía al día.',
+    created_at: '2026-08-20T10:00:00.000Z',
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777712',
+    convenio_id: '55555555-5555-4555-8555-555555555504',
+    estado_uic: 'Facturado Conforme',
+    numero_guia: 'G-11095',
+    fecha_guia: '2026-08-15',
+    codigo_mi_ssvq: 'SSVQ-MI-2026-175',
+    fecha_entrega_abastecimiento: '2026-08-18',
+    empresa: 'Eppendorf Chile Ltda.',
+    equipo_servicio: 'Centrífuga Laboratorio Clínico',
+    orden_compra: '2398-140-CM24',
+    fecha_oc: '2026-08-20',
+    mes: 'Agosto',
+    anio: 2026,
+    cuota: '8/12',
+    valor_clp: 1200000,
+    estado_mercado_publico: 'Recepcionado Conforme',
+    numero_factura: 'F-77401',
+    fecha_factura: '2026-08-22',
+    observaciones: 'Arriendo mensual al día.',
+    created_at: '2026-08-22T10:00:00.000Z',
+  },
+];
+
 type QueryFilter = (row: Record<string, unknown>) => boolean;
 type SortComparator = (a: Record<string, unknown>, b: Record<string, unknown>) => number;
 
@@ -829,6 +1307,9 @@ function createMockClient() {
   let fallas: FallaMantenimiento[] = getStored<FallaMantenimiento[]>('fallas', []);
   let externalizaciones: Externalizacion[] = getStored<Externalizacion[]>('externalizaciones', INITIAL_EXTERNALIZACIONES);
   let notificaciones: Notificacion[] = getStored<Notificacion[]>('notificaciones', INITIAL_NOTIFICACIONES);
+  let convenios: Convenio[] = getStored<Convenio[]>('convenios', INITIAL_CONVENIOS);
+  let convenioEquipos: ConvenioEquipo[] = getStored<ConvenioEquipo[]>('convenio_equipos', INITIAL_CONVENIO_EQUIPOS);
+  let convenioCuotas: ConvenioCuotaMensual[] = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', INITIAL_CONVENIO_CUOTAS);
   let perfiles: PerfilUsuario[] = getStored<PerfilUsuario[]>('perfiles', INITIAL_PERFILES).map((p) => {
     if (p.rol === 'Ingeniero de Servicio / Técnico' && p.permisos?.crear_solicitud_ot) {
       return {
@@ -870,6 +1351,16 @@ function createMockClient() {
       if (match) maxNum = Math.max(maxNum, parseInt(match[1], 10));
     }
     return `EXT-${String(maxNum + 1).padStart(3, '0')}`;
+  }
+
+  function getNextConvCode(): string {
+    let maxNum = 0;
+    const currentYear = new Date().getFullYear();
+    for (const c of convenios) {
+      const match = c.codigo?.match(/(\d+)\s*$/);
+      if (match) maxNum = Math.max(maxNum, parseInt(match[1], 10));
+    }
+    return `CONV-${currentYear}-${String(maxNum + 1).padStart(3, '0')}`;
   }
 
   return {
@@ -918,6 +1409,48 @@ function createMockClient() {
                 else if (tableName === 'perfiles') {
                   perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
                   dataset = [...(perfiles as unknown as Record<string, unknown>[])];
+                }
+                else if (tableName === 'convenios') {
+                  convenios = getStored<Convenio[]>('convenios', convenios);
+                  dataset = [...(convenios as unknown as Record<string, unknown>[])];
+                }
+                else if (tableName === 'convenio_equipos') {
+                  convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
+                  dataset = [...(convenioEquipos as unknown as Record<string, unknown>[])];
+                }
+                else if (tableName === 'convenio_cuotas_mensuales') {
+                  convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+                  dataset = [...(convenioCuotas as unknown as Record<string, unknown>[])];
+                }
+                else if (tableName === 'vista_auditoria_convenios') {
+                  convenios = getStored<Convenio[]>('convenios', convenios);
+                  convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+                  const totalComprometido = convenios.reduce((acc, c) => acc + (c.monto_total_comprometido || 0), 0);
+                  const montoEjecutado = convenioCuotas
+                    .filter((q) => q.estado_uic === 'Facturado Conforme' || q.estado_uic === 'Pagado')
+                    .reduce((acc, q) => acc + (q.valor_clp || 0), 0);
+                  const saldoDeuda = Math.max(0, totalComprometido - montoEjecutado);
+                  const hoy = new Date();
+                  const conveniosPorVencer = convenios.filter((c) => {
+                    if (!c.fecha_termino) return false;
+                    const diffDays = Math.ceil((new Date(c.fecha_termino).getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+                    return diffDays >= 0 && diffDays <= 60;
+                  }).length;
+                  const cuotasTrabaAdmin = convenioCuotas.filter((q) => {
+                    const tieneGuia = Boolean(q.numero_guia && q.numero_guia.trim() !== '');
+                    const estado = (q.estado_uic || '').trim().toLowerCase();
+                    return tieneGuia && (estado === 'pendiente de oc' || estado === 'sin presupuesto');
+                  }).length;
+
+                  const row: VistaAuditoriaConvenios = {
+                    total_presupuesto_comprometido_clp: totalComprometido,
+                    total_presupuesto_comprometido_uf: Math.round(totalComprometido / 38500),
+                    monto_ejecutado_clp: montoEjecutado,
+                    saldo_deuda_clp: saldoDeuda,
+                    convenios_por_vencer_count: conveniosPorVencer,
+                    cuotas_traba_administrativa_count: cuotasTrabaAdmin,
+                  };
+                  dataset = [row as unknown as Record<string, unknown>];
                 }
 
                 for (const filter of filters) {
@@ -976,6 +1509,19 @@ function createMockClient() {
               perfiles = getStored<PerfilUsuario[]>('perfiles', perfiles);
               perfiles = [newItem as unknown as PerfilUsuario, ...perfiles];
               setStored('perfiles', perfiles);
+            } else if (tableName === 'convenios') {
+              if (!newItem.codigo) newItem.codigo = getNextConvCode();
+              convenios = getStored<Convenio[]>('convenios', convenios);
+              convenios = [newItem as unknown as Convenio, ...convenios];
+              setStored('convenios', convenios);
+            } else if (tableName === 'convenio_equipos') {
+              convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
+              convenioEquipos = [newItem as unknown as ConvenioEquipo, ...convenioEquipos];
+              setStored('convenio_equipos', convenioEquipos);
+            } else if (tableName === 'convenio_cuotas_mensuales') {
+              convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+              convenioCuotas = [newItem as unknown as ConvenioCuotaMensual, ...convenioCuotas];
+              setStored('convenio_cuotas', convenioCuotas);
             }
             created.push(newItem);
           }
@@ -1055,6 +1601,39 @@ function createMockClient() {
                   return p;
                 });
                 setStored('perfiles', perfiles);
+              } else if (tableName === 'convenios') {
+                convenios = getStored<Convenio[]>('convenios', convenios);
+                convenios = convenios.map((c) => {
+                  if ((c as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...c, ...updates } as unknown as Convenio;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return c;
+                });
+                setStored('convenios', convenios);
+              } else if (tableName === 'convenio_equipos') {
+                convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
+                convenioEquipos = convenioEquipos.map((ce) => {
+                  if ((ce as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...ce, ...updates } as unknown as ConvenioEquipo;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return ce;
+                });
+                setStored('convenio_equipos', convenioEquipos);
+              } else if (tableName === 'convenio_cuotas_mensuales') {
+                convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+                convenioCuotas = convenioCuotas.map((cq) => {
+                  if ((cq as unknown as Record<string, unknown>)[column] === value) {
+                    const row = { ...cq, ...updates } as unknown as ConvenioCuotaMensual;
+                    updatedRows.push(row as unknown as Record<string, unknown>);
+                    return row;
+                  }
+                  return cq;
+                });
+                setStored('convenio_cuotas', convenioCuotas);
               }
               const response = { data: updatedRows, error: null };
               return {
@@ -1109,6 +1688,24 @@ function createMockClient() {
                     (p) => (p as unknown as Record<string, unknown>)[column] !== value
                   );
                   setStored('perfiles', perfiles);
+                } else if (tableName === 'convenios') {
+                  convenios = getStored<Convenio[]>('convenios', convenios);
+                  convenios = convenios.filter(
+                    (c) => (c as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('convenios', convenios);
+                } else if (tableName === 'convenio_equipos') {
+                  convenioEquipos = getStored<ConvenioEquipo[]>('convenio_equipos', convenioEquipos);
+                  convenioEquipos = convenioEquipos.filter(
+                    (ce) => (ce as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('convenio_equipos', convenioEquipos);
+                } else if (tableName === 'convenio_cuotas_mensuales') {
+                  convenioCuotas = getStored<ConvenioCuotaMensual[]>('convenio_cuotas', convenioCuotas);
+                  convenioCuotas = convenioCuotas.filter(
+                    (cq) => (cq as unknown as Record<string, unknown>)[column] !== value
+                  );
+                  setStored('convenio_cuotas', convenioCuotas);
                 }
                 return { data: null, error: null };
               })();
@@ -1167,6 +1764,20 @@ function createMockClient() {
         const session = { user, access_token: 'mock-session-token' };
         return { data: { user, session }, error: null };
       },
+      async signUp({ email, password, options }: { email?: string; password?: string; options?: { data?: Record<string, unknown> } }) {
+        const list = getStored<PerfilUsuario[]>('perfiles', perfiles);
+        const exists = list.some((p) => p.email.toLowerCase() === (email || '').toLowerCase().trim());
+        if (exists) {
+          return { data: { user: null, session: null }, error: new Error('Ya existe un usuario con este correo electrónico.') };
+        }
+        const newId = generateUuid();
+        const user = {
+          id: newId,
+          email: email || '',
+          user_metadata: { ...(options?.data || {}), has_password: Boolean(password) },
+        };
+        return { data: { user, session: null }, error: null };
+      },
       async signOut() {
         return { error: null };
       },
@@ -1212,7 +1823,42 @@ if (hasValidSupabaseEnv) {
             if (tableName === 'perfiles') {
               return mockClient.from('perfiles');
             }
-            return target.from(tableName);
+            const liveFrom = target.from(tableName);
+            if (['convenios', 'convenio_equipos', 'convenio_cuotas_mensuales', 'vista_auditoria_convenios'].includes(tableName)) {
+              return new Proxy(liveFrom, {
+                get(qTarget, qProp, qReceiver) {
+                  if (qProp === 'select') {
+                    return (...args: unknown[]) => {
+                      const liveQuery = (qTarget.select as (...a: unknown[]) => Promise<{ data?: unknown[]; error?: unknown }>)(...args);
+                      return new Proxy(liveQuery, {
+                        get(resTarget, resProp) {
+                          if (resProp === 'then') {
+                            return (onfulfilled?: (val: unknown) => unknown, onrejected?: (reason: unknown) => unknown) => {
+                              return liveQuery.then((res: { data?: unknown[]; error?: unknown }) => {
+                                if (res.error || !res.data || res.data.length === 0) {
+                                  return (mockClient.from(tableName).select() as unknown as Promise<{ data: unknown[]; error: unknown }>).then((mockRes) => {
+                                    if (res.error) return onfulfilled ? onfulfilled(mockRes) : mockRes;
+                                    if (res.data && res.data.length > 0) return onfulfilled ? onfulfilled(res) : res;
+                                    return onfulfilled ? onfulfilled(mockRes) : mockRes;
+                                  });
+                                }
+                                return onfulfilled ? onfulfilled(res) : res;
+                              }).catch(() => {
+                                return (mockClient.from(tableName).select() as unknown as Promise<unknown>).then(onfulfilled, onrejected);
+                              });
+                            };
+                          }
+                          return Reflect.get(resTarget, resProp);
+                        },
+                      });
+                    };
+                  }
+                  const val = Reflect.get(qTarget, qProp, qReceiver);
+                  return typeof val === 'function' ? val.bind(qTarget) : val;
+                },
+              });
+            }
+            return liveFrom;
           };
         }
         const val = Reflect.get(target, prop, receiver);

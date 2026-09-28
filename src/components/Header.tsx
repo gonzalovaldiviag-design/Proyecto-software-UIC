@@ -17,6 +17,7 @@ import {
   Sparkles,
   RotateCcw,
   LogOut,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '@/lib/authContext';
 import { ROLES_SIMULABLES } from '@/lib/authRoles';
@@ -29,7 +30,7 @@ import {
 } from '@/lib/supabase';
 import NotificationInboxModal from '@/components/NotificationInboxModal';
 
-export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'usuarios';
+export type AppTab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'convenios' | 'usuarios';
 
 interface HeaderProps {
   currentTab: AppTab;
@@ -102,6 +103,7 @@ export default function Header({
     detenerSimulacion,
     logout,
     puede,
+    esAdmin,
   } = useAuth();
 
   const [simulacionOpen, setSimulacionOpen] = useState(false);
@@ -593,9 +595,26 @@ export default function Header({
             </button>
           )}
 
-          {/* Usuarios: visible only for users with gestionar_usuarios (Administrador) */}
-          {puede('gestionar_usuarios') && (
+          {/* Convenios y Control de Pagos UIC */}
+          {puede('ver_externalizacion') && (
             <button
+              id="tab-convenios-pagos"
+              onClick={() => onTabChange('convenios')}
+              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                currentTab === 'convenios'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <FileText className="h-4 w-4" />
+              <span>Convenios y Pagos</span>
+            </button>
+          )}
+
+          {/* Gestión de Usuarios: visible únicamente para rol Administrador */}
+          {(esAdmin || puede('gestionar_usuarios')) && (
+            <button
+              id="tab-gestion-usuarios"
               onClick={() => onTabChange('usuarios')}
               className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 currentTab === 'usuarios'
@@ -604,7 +623,7 @@ export default function Header({
               }`}
             >
               <Users className="h-4 w-4" />
-              <span>Usuarios y Roles</span>
+              <span>Gestión de Usuarios</span>
               <span className="rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold px-1.5 py-0.2 ring-1 ring-purple-500/20">
                 Admin
               </span>

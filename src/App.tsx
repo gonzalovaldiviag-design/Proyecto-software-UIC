@@ -14,13 +14,14 @@ import LoginView from '@/components/LoginView';
 import EquiposView from '@/components/EquiposView';
 import MantenimientosView from '@/components/MantenimientosView';
 import ExternalizacionView from '@/components/ExternalizacionView';
+import ConveniosView from '@/components/ConveniosView';
 import UsuariosView from '@/components/UsuariosView';
 import EquipoModal from '@/components/EquipoModal';
 import HojaVidaModal from '@/components/HojaVidaModal';
 import MantenimientoModal, { type MantenimientoFormData } from '@/components/MantenimientoModal';
 import MantenimientoChoiceModal from '@/components/MantenimientoChoiceModal';
 
-type Tab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'usuarios';
+type Tab = 'inventario' | 'mantenimiento' | 'externalizacion' | 'convenios' | 'usuarios';
 
 class TabErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
   state = { message: null as string | null };
@@ -355,6 +356,12 @@ function AppContent() {
               equipos={equipos}
               onNavigateToMantenimiento={() => setTab('mantenimiento')}
             />
+          </TabErrorBoundary>
+        )}
+
+        {tab === 'convenios' && (
+          <TabErrorBoundary>
+            <ConveniosView />
           </TabErrorBoundary>
         )}
 
